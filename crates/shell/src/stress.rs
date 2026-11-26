@@ -455,6 +455,29 @@ fn tab_titles_are_distinct_per_site() {
 }
 
 #[test]
+fn bare_hosts_are_normalised_to_https() {
+    // Typing a host without a scheme must become a loadable https URL, while
+    // explicit schemes and special URLs stay untouched.
+    let mut rt = rt((1280.0, 800.0));
+    rt.state.navigate("  es.wikipedia.org/wiki/España  ");
+    assert_eq!(
+        rt.state.tab().url_edit.text,
+        "https://es.wikipedia.org/wiki/España",
+        "bare host normalised and trimmed"
+    );
+    rt.state.navigate("http://example.org/path");
+    assert_eq!(rt.state.tab().url_edit.text, "http://example.org/path");
+    rt.state.navigate("data:text/html,<h1>x</h1>");
+    assert_eq!(rt.state.tab().url_edit.text, "página local");
+    rt.state.navigate("//example.org/colonial");
+    assert_eq!(
+        rt.state.tab().url_edit.text,
+        "//example.org/colonial",
+        "protocol-relative URL left as-is"
+    );
+}
+
+#[test]
 fn address_bar_follows_navigation_and_redirects() {
     // Clicking a bookmark changes the loaded URL; the visible address bar must
     // follow it, otherwise the user sees a stale address. A blocking navigation

@@ -473,6 +473,26 @@ fn display_url(url: &str) -> String {
     }
 }
 
+/// Normalises what the user types in the address bar the way a browser does:
+/// a bare host (or host+path) gets `https://` prepended; explicit schemes and
+/// special URLs are left untouched. This is what turns `es.wikipedia.org`
+/// into a loadable page instead of a failed navigation.
+fn normalize_url(input: &str) -> String {
+    let trimmed = input.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    // Anything with a scheme (http(s), data, about, file, mailto, ...) or a
+    // protocol-relative URL is already explicit.
+    if lower.contains("://")
+        || lower.starts_with("data:")
+        || lower.starts_with("about:")
+        || lower.starts_with("javascript:")
+        || trimmed.starts_with("//")
+    {
+        return trimmed.to_owned();
+    }
+    format!("https://{trimmed}")
+}
+
 /// Derives a short tab title from a navigation URL. Known sites get a clean
 /// name; anything else falls back to its hostname, so each tab is
 /// distinguishable at a glance instead of all reading "Historia de España".
@@ -752,7 +772,7 @@ impl State {
         let target = if url.trim().is_empty() {
             start_url()
         } else {
-            url.to_owned()
+            normalize_url(url)
         };
         // Reflect the intent immediately in the URL bar and clear stale errors.
         tab.nav_error = None;

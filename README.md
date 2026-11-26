@@ -117,8 +117,9 @@ an end-to-end page-link click, the hover-cursor lifecycle, and Cmd-click opening
 a new tab, the link context menu + actions, dismiss-on-outside-click, menu
 edge-clamping, hover/click hit-test agreement, and worker view release on tab
 close. The pointer-move hover path is allocation-free (`link_hit_local`
-booleans; href resolution only happens on click). Full suite: 33 tests in ~1.6 s
-(down from ~174 s before navigation became asynchronous).
+booleans; href resolution only happens on click), and browser-style URL
+normalisation for bare hosts typed in the address bar. Full suite: 34 tests in
+~1.8 s (down from ~174 s before navigation became asynchronous).
 
 ## Build & run
 
