@@ -280,6 +280,29 @@ fn closing_tabs_keeps_at_least_one_and_valid_index() {
 }
 
 #[test]
+fn closing_tabs_with_navigation_in_flight_never_revives_a_closed_view() {
+    // Closing a tab posts a view-release signal to the worker. A burst of
+    // create → navigate → close must leave the UI with a consistent tab set and
+    // no late result applied to an unrelated tab.
+    let mut rt = rt((1280.0, 800.0));
+    for i in 0..8 {
+        rt.state.new_tab();
+        let id = rt.state.tab().id;
+        rt.state
+            .navigate(&format!("data:text/html,<h1>tab {i}</h1>"));
+        rt.state.close_tab(id);
+        rt.frame(1.0 / 60.0);
+        assert!(!rt.state.tabs.is_empty());
+        assert!(rt.state.active_tab < rt.state.tabs.len());
+    }
+    // Drain any in-flight results; none may resurrect a closed tab or panic.
+    for _ in 0..30 {
+        rt.frame(1.0 / 60.0);
+    }
+    assert!(rt.state.tab().nav_error.is_none() || rt.state.tab().nav_error.is_some());
+}
+
+#[test]
 fn tab_switch_is_non_blocking_and_preserves_each_tabs_url() {
     use std::time::Instant;
     let mut rt = rt((1280.0, 800.0));

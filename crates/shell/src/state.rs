@@ -189,6 +189,9 @@ enum NavTarget {
     Back,
     Forward,
     Reload,
+    /// Tells the worker to drop its WebView for a closed tab, releasing the
+    /// engine's memory. Ids are monotonic, so this can never hit a reused tab.
+    Close,
 }
 
 /// A request posted to the render worker.
@@ -250,6 +253,17 @@ impl NavSender {
     pub fn reload(&self, tab_id: u64) {
         self.send(tab_id, NavTarget::Reload);
     }
+    pub fn close(&self, tab_id: u64) {
+        // No render is needed, so don't bump the generation counter: just post
+        // a bare request the worker recognises as a view-release signal.
+        if let Ok(tx) = self.tx.lock() {
+            let _ = tx.send(NavRequest {
+                tab_id,
+                target: NavTarget::Close,
+                generation: 0,
+            });
+        }
+    }
 }
 
 /// Spawns the background render worker. It owns one `WebView` per tab, renders
@@ -262,6 +276,12 @@ fn spawn_worker(results: Sender<NavResult>, requests: Receiver<NavRequest>) {
         .spawn(move || {
             let mut views: HashMap<u64, WebView> = HashMap::new();
             while let Ok(req) = requests.recv() {
+                // A closed tab releases its engine view. Handle this before the
+                // entry() below so we never recreate a view just to drop it.
+                if matches!(req.target, NavTarget::Close) {
+                    views.remove(&req.tab_id);
+                    continue;
+                }
                 let web = views.entry(req.tab_id).or_insert_with(|| {
                     let opts =
                         WebViewOptions::new(PAGE_W, PAGE_H).expect("valid viewport dimensions");
@@ -291,6 +311,9 @@ fn spawn_worker(results: Sender<NavResult>, requests: Receiver<NavRequest>) {
                         NavTarget::Back => (web.back(), None),
                         NavTarget::Forward => (web.forward(), None),
                         NavTarget::Reload => (web.reload(), None),
+                        // Already handled by the `continue` above; keep the
+                        // match exhaustive.
+                        NavTarget::Close => (None, None),
                     };
                 match frame {
                     Some(f) => {
@@ -704,6 +727,9 @@ impl State {
         }
         if let Some(pos) = self.tabs.iter().position(|t| t.id == id) {
             self.tabs.remove(pos);
+            // Tell the render worker to drop the engine view too, so closing
+            // many tabs doesn't leak a WebView per id for the app's lifetime.
+            self.nav.close(id);
             if self.active_tab >= self.tabs.len() {
                 self.active_tab = self.tabs.len() - 1;
             } else if self.active_tab > pos {

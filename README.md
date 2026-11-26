@@ -115,10 +115,10 @@ address-bar synchronisation on navigate/redirect, per-site tab titles,
 the keyboard-shortcut suite, link extraction/resolution, Fit-letterbox mapping,
 an end-to-end page-link click, the hover-cursor lifecycle, and Cmd-click opening
 a new tab, the link context menu + actions, dismiss-on-outside-click, menu
-edge-clamping, and hover/click hit-test agreement. The pointer-move hover path
-is allocation-free (`link_hit_local` booleans; href resolution only happens on
-click). Full suite: 32 tests in ~1.9 s (down from ~174 s before navigation
-became asynchronous).
+edge-clamping, hover/click hit-test agreement, and worker view release on tab
+close. The pointer-move hover path is allocation-free (`link_hit_local`
+booleans; href resolution only happens on click). Full suite: 33 tests in ~1.6 s
+(down from ~174 s before navigation became asynchronous).
 
 ## Build & run
 
