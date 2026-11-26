@@ -303,6 +303,39 @@ fn closing_tabs_with_navigation_in_flight_never_revives_a_closed_view() {
 }
 
 #[test]
+fn switching_tabs_clears_stale_link_hover() {
+    use rune::Cursor;
+    let mut rt = rt((1280.0, 800.0));
+    rt.state.navigate_blocking(
+        "data:text/html,<a href='https://example.org/go' style='font-size:48px'>GO</a>",
+    );
+    rt.frame(1.0 / 60.0);
+    let link = rt.state.tab().links[0].clone();
+    let [px, py, pw, ph] = rt.state.page_rect;
+    let (sw, sh) = (rt.state.tab().page_w as f32, rt.state.tab().page_h as f32);
+    let scale = (pw / sw).min(ph / sh);
+    let in_x = px + (pw - sw * scale) * 0.5 + (link.x + link.w * 0.5) * scale;
+    let in_y = py + (ph - sh * scale) * 0.5 + (link.y + link.h * 0.5) * scale;
+    rt.pointer_move(in_x, in_y);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.hover_link, "hand cursor over the link");
+
+    // Switch to another tab without moving the pointer: the stale flag must be
+    // dropped so we don't show a hand cursor over a page region that changed.
+    rt.state.new_tab();
+    rt.frame(1.0 / 60.0);
+    assert!(!rt.state.hover_link, "stale hover cleared on tab switch");
+
+    // Nudge the pointer inside the new (link-free) tab's page. Rune retains the
+    // hovered node briefly while layout animates, so force a fresh hit test by
+    // moving; the cursor must stay default, proving no stale hover survived.
+    rt.pointer_move(in_x + 3.0, in_y + 3.0);
+    rt.frame(1.0 / 60.0);
+    assert!(!rt.state.hover_link, "no hover on the new tab's page");
+    assert_eq!(rt.cursor(), Cursor::Default, "no stale hand cursor");
+}
+
+#[test]
 fn tab_switch_is_non_blocking_and_preserves_each_tabs_url() {
     use std::time::Instant;
     let mut rt = rt((1280.0, 800.0));

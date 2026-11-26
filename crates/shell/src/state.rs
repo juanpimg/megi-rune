@@ -697,6 +697,8 @@ impl State {
         self.next_tab_id += 1;
         self.tabs.push(initial_tab(id));
         self.active_tab = self.tabs.len() - 1;
+        // New tab has different link regions; clear a stale hand cursor.
+        self.hover_link = false;
     }
 
     /// Opens the link context menu at the given window-point anchor, clamped
@@ -761,6 +763,8 @@ impl State {
             } else if self.active_tab > pos {
                 self.active_tab -= 1;
             }
+            // The page under the pointer may have changed; drop stale hover.
+            self.hover_link = false;
         }
     }
 
@@ -769,17 +773,24 @@ impl State {
     pub fn select_tab(&mut self, id: u64) {
         if let Some(pos) = self.tabs.iter().position(|t| t.id == id) {
             self.active_tab = pos;
+            // The pointer hasn't moved and the page under it changed, so no
+            // hover event will refresh this. Drop a stale hand cursor; the next
+            // pointer move recomputes it against the new tab's link regions.
+            self.hover_link = false;
         }
     }
 
     /// Requests navigation on the active tab without blocking the caller.
     pub fn navigate(&mut self, url: &str) {
-        let tab = self.tab_mut();
         let target = if url.trim().is_empty() {
             start_url()
         } else {
             normalize_url(url)
         };
+        // The page under the pointer is about to change; drop a stale hand
+        // cursor (the next pointer move recomputes it) before borrowing `tab`.
+        self.hover_link = false;
+        let tab = self.tab_mut();
         // Reflect the intent immediately in the URL bar and clear stale errors.
         tab.nav_error = None;
         tab.loaded_url = target.clone();

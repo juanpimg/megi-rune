@@ -118,9 +118,10 @@ a new tab, the link context menu + actions, dismiss-on-outside-click, menu
 edge-clamping, hover/click hit-test agreement, and worker view release on tab
 close. The pointer-move hover path is allocation-free (`link_hit_local`
 booleans; href resolution only happens on click), and browser-style URL
-normalisation for bare hosts typed in the address bar, and relative-link
-resolution that ignores the base URL's query/fragment. Full suite: 34 tests in
-~1.9 s (down from ~174 s before navigation became asynchronous).
+normalisation for bare hosts typed in the address bar, relative-link
+resolution that ignores the base URL's query/fragment, and stale-hover reset on
+tab/navigation changes. Full suite: 35 tests in ~1.8 s (down from ~174 s before
+navigation became asynchronous).
 
 ## Build & run
 
