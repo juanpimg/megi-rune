@@ -561,15 +561,22 @@ fn content_pane(s: &State) -> El {
         })
         // Clicking a rendered link navigates, just like a real browser. The
         // hit-test is pure state work — no engine render on the UI thread.
-        .on_any_press(|st: &mut State, btn, p: rune::PointerEvent, _tx| {
-            // Only the primary button navigates; right/middle clicks stay free
-            // for context menus and "open in new tab" in a future revision.
-            if btn == rune::PointerButton::Primary
-                && let Some(url) = st.link_at_local(p.x, p.y)
-            {
-                st.navigate(&url);
-            }
-        });
+        .on_any_press(
+            |st: &mut State, btn, p: rune::PointerEvent, tx: &mut rune::Tx| {
+                // Primary click navigates in place; Cmd/Ctrl+click (like a desktop
+                // browser) and middle-click open the link in a new tab.
+                let new_tab = btn == rune::PointerButton::Middle
+                    || (btn == rune::PointerButton::Primary && tx.mods().primary());
+                let secondary = btn == rune::PointerButton::Secondary;
+                if !secondary && let Some(url) = st.link_at_local(p.x, p.y) {
+                    if new_tab {
+                        st.new_tab_with_url(&url);
+                    } else {
+                        st.navigate(&url);
+                    }
+                }
+            },
+        );
 
     let mut pane = col()
         .key("content")

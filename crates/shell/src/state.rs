@@ -619,6 +619,20 @@ impl State {
         self.active_tab = self.tabs.len() - 1;
     }
 
+    /// Opens a brand-new tab and immediately navigates it to `url`. Used by
+    /// middle-click / Cmd-click on an in-page link. If the tab limit is hit it
+    /// navigates the current tab instead, so the click is never swallowed.
+    pub fn new_tab_with_url(&mut self, url: &str) {
+        let before = self.tabs.len();
+        self.new_tab();
+        if self.tabs.len() == before {
+            // At MAX_TABS: fall back to navigating the current tab.
+            self.navigate(url);
+            return;
+        }
+        self.navigate(url);
+    }
+
     /// Closes a tab by id, keeping at least one tab open. Queued results for
     /// the closed id are discarded in `poll_navigation` (their tab no longer
     /// exists), so they cannot be applied to another tab.

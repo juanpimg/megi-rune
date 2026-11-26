@@ -564,6 +564,44 @@ fn clicking_page_link_navigates_in_real_view() {
 }
 
 #[test]
+fn cmd_click_opens_link_in_new_tab() {
+    use rune::{Mods, PhysicalInput};
+    // Cmd/Ctrl+click on a rendered link opens a new tab instead of navigating
+    // the current one, leaving the original tab's URL untouched.
+    let mut rt = rt((1280.0, 800.0));
+    rt.state.navigate_blocking(
+        "data:text/html,<a href='https://example.org/new' style='font-size:48px'>GO</a>",
+    );
+    rt.frame(1.0 / 60.0);
+    let original_id = rt.state.tab().id;
+    let link = rt.state.tab().links[0].clone();
+    let [px, py, pw, ph] = rt.state.page_rect;
+    let (sw, sh) = (rt.state.tab().page_w as f32, rt.state.tab().page_h as f32);
+    let scale = (pw / sw).min(ph / sh);
+    let cx = px + (pw - sw * scale) * 0.5 + (link.x + link.w * 0.5) * scale;
+    let cy = py + (ph - sh * scale) * 0.5 + (link.y + link.h * 0.5) * scale;
+
+    rt.physical_input(PhysicalInput::Modifiers(Mods {
+        cmd: true,
+        ..Mods::default()
+    }));
+    rt.pointer_down(cx, cy);
+    rt.pointer_up(cx, cy);
+    rt.frame(1.0 / 60.0);
+
+    assert_eq!(rt.state.tabs.len(), 2, "a new tab was opened");
+    // The new tab is active and requested the link URL (async, so loaded_url
+    // reflects the request even before the worker's pixels arrive).
+    assert_eq!(rt.state.tab().loaded_url, "https://example.org/new");
+    // The original tab still sits at its own URL.
+    let original = rt.state.tabs.iter().find(|t| t.id == original_id).unwrap();
+    assert!(
+        original.loaded_url.starts_with("data:"),
+        "original tab untouched"
+    );
+}
+
+#[test]
 fn hovering_a_link_shows_pointer_cursor() {
     use rune::Cursor;
     // Hovering a rendered link must flip the page to a pointing-hand cursor,
