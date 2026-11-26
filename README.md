@@ -19,8 +19,16 @@ WebFrame.pixmap.to_rgba_bytes()  ->  rune::Pixels::set(w, h, rgba)  ->  el().pix
 ```
 
 No FFI, no `unsafe`, no engine patches — just one `Vec<u8>` copy per navigation.
-For a 1120×820 viewport that is ~3.7 MB per load; since Megi's `load()` is
-synchronous and pages are static in this prototype, that cost is fine.
+For a 1120×820 viewport that is ~3.7 MB per load.
+
+Megi's `load()` renders **synchronously** and can block on the network, so
+calling it from a Rune `on_press` handler would freeze the UI for seconds. The
+shell therefore renders on a background worker thread: UI handlers only queue a
+`NavRequest` (instant), the worker owns its own `WebView`, and `State::poll`
+drains finished `NavResult`s into `rune::Pixels` each frame. Navigation requests
+carry a generation number, so a burst of rapid clicks settles on the newest
+page instead of flickering through stale results. `back`/`forward`/`reload` run
+on the worker's own history, staying in sync with what was rendered.
 
 ## Layout
 
@@ -38,6 +46,30 @@ Icons are vector paths (`Shape::fill_svg` / `stroke_svg`); colours are authored
 in OKLCH to match the dark, rounded reference chrome. Interactive controls use
 `.hover_fill()` and Rune's `motion::SNAPPY` spring.
 
+### Responsive behaviour
+
+The window size is read from an `on_layout` callback on the root element and
+drives a breakpoint (520 pt):
+
+- **wide windows** — full toolbar, rail + wide sidebar panel, page scaled with
+  `SurfaceFit::Fit`;
+- **narrow windows** — the wide panel collapses to the icon rail and the four
+  trailing toolbar actions are dropped (they remain in the rail), so the page
+  keeps a usable share of the window.
+
+The page uses `pixels_fit(..., Fit)` so resizing letterboxes the engine frame
+instead of stretching the article. Space tiles use a transparent `outline` on
+inactive tiles so switching spaces never shifts the row's layout.
+
+### Stress tests
+
+`crates/shell/src/stress.rs` hammers the UI the way a user would: every toolbar
+control pressed repeatedly, sidebar toggled mid-click, 12 viewport sizes from
+1×1 to 4K/ultrawide, resize while the sidebar flips, rapid bookmark/space
+navigation, wheel scrolling, garbage URL input, and a timing assertion that
+clicks stay non-blocking. Full suite runs in ~1 s (down from ~174 s before
+navigation became asynchronous).
+
 ## Build & run
 
 ```sh
@@ -47,6 +79,8 @@ cargo run -p megi-rune-shell                       # with a display
 cargo run -p megi-rune-shell -- --snap shell.png   # headless snapshot
 cargo run -p megi-rune-shell -- --tree             # dump element tree
 cargo run -p megi-rune-shell -- --snap x.png --scene no-sidebar
+cargo run -p megi-rune-shell -- --snap x.png --scene inline-page --settle
+cargo run -p megi-rune-shell -- --snap x.png --size 500x400 --settle  # narrow window
 ```
 
 Rune ships vendored `[patch.crates-io]` entries that Cargo does **not** inherit

@@ -17,9 +17,16 @@ fn hide_sidebar(s: &mut State) {
     s.sidebar_open = false;
 }
 
+/// Deterministic scene: renders a small inline page through the real engine,
+/// useful for verifying the bridge without depending on the network.
+fn inline_page(s: &mut State) {
+    s.navigate_blocking("data:text/html,<h1 style='font:48px sans-serif'>Puente OK</h1>");
+}
+
 fn main() {
     rune::run(AppSpec::<State> {
-        scenes: &[("no-sidebar", hide_sidebar)],
+        scenes: &[("no-sidebar", hide_sidebar), ("inline-page", inline_page)],
+        poll: Some(state::poll),
         ..AppSpec::new(
             "Megi — Rune Shell",
             (1280.0, 800.0),
@@ -28,3 +35,6 @@ fn main() {
         )
     });
 }
+
+#[cfg(test)]
+mod stress;

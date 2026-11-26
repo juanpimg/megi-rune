@@ -197,7 +197,7 @@ fn address_bar(s: &State) -> El {
 }
 
 fn toolbar(s: &State) -> El {
-    row()
+    let bar = row()
         .key("toolbar")
         .h(52.0)
         .w_full()
@@ -214,11 +214,25 @@ fn toolbar(s: &State) -> El {
         .child(tool_button("back", back_icon(), action_back))
         .child(tool_button("forward", forward_icon(), action_forward))
         .child(tool_button("reload", reload_icon(), action_reload))
-        .child(row().grow(1.0).justify_center().child(address_bar(s)))
-        .child(tool_button("settings", settings_icon(), action_settings))
-        .child(tool_button("share", share_icon(), action_share))
-        .child(tool_button("new-tab", plus_icon(), action_new_tab))
-        .child(tool_button("menu", menu_icon(), action_menu))
+        .child(
+            row()
+                .grow(1.0)
+                .min_w(0.0)
+                .justify_center()
+                .child(address_bar(s)),
+        );
+
+    // On narrow windows the four trailing actions do not fit. The icon rail
+    // already has settings/share/new-tab, so drop these from the toolbar to
+    // keep the address bar usable.
+    if s.viewport_w >= SIDEBAR_PANEL_MIN_W {
+        bar.child(tool_button("settings", settings_icon(), action_settings))
+            .child(tool_button("share", share_icon(), action_share))
+            .child(tool_button("new-tab", plus_icon(), action_new_tab))
+            .child(tool_button("menu", menu_icon(), action_menu))
+    } else {
+        bar
+    }
 }
 
 /// The narrow vertical icon rail on the far left.
@@ -296,6 +310,9 @@ fn tile_row(prefix: &'static str, tiles: Vec<El>) -> El {
 }
 
 /// Space tiles built from state, with the active space ringed in accent.
+/// Both states carry an `outline` of identical width so switching spaces never
+/// changes the tile's layout box (a border on only the active tile made the
+/// whole row jump 4 px on every click).
 fn space_tiles(s: &State) -> Vec<El> {
     s.spaces
         .iter()
@@ -303,13 +320,10 @@ fn space_tiles(s: &State) -> Vec<El> {
         .map(|(i, sp)| {
             let active = i == s.active_space;
             let idx = i;
-            let mut e = round_tile(&sp.label[..1], sp.tint, sp.label, move |st: &mut State| {
+            round_tile(&sp.label[..1], sp.tint, sp.label, move |st: &mut State| {
                 st.active_space = idx;
-            });
-            if active {
-                e = e.border(2.0, accent());
-            }
-            e
+            })
+            .outline(2.0, 1.0, if active { accent() } else { Color::TRANSPARENT })
         })
         .collect()
 }
@@ -416,7 +430,9 @@ fn content_pane(s: &State) -> El {
         .w_full()
         .grow(1.0)
         .radius(8.0)
-        .pixels(&s.page)
+        // `Fit` preserves the engine frame's aspect ratio, so resizing the
+        // window letterboxes instead of stretching the article sideways.
+        .pixels_fit(&s.page, rune::SurfaceFit::Fit)
         .min_h(0.0);
 
     let mut pane = col()
@@ -439,10 +455,23 @@ fn content_pane(s: &State) -> El {
     pane
 }
 
+/// Below this width the wide sidebar panel gives way to the icon rail only,
+/// so the page keeps a usable share of a narrow window.
+const SIDEBAR_PANEL_MIN_W: f32 = 520.0;
+
 /// Root view.
 pub fn view(s: &State, _cx: &mut Cx<State>) -> El {
+    // An explicit sidebar toggle always wins; otherwise auto-collapse the wide
+    // panel on narrow windows while keeping the icon rail for navigation.
+    let panel_visible = s.sidebar_open && s.viewport_w >= SIDEBAR_PANEL_MIN_W;
     let sidebar = if s.sidebar_open {
-        row().key("sidebar").child(rail()).child(sidebar_panel(s))
+        if panel_visible {
+            row().key("sidebar").child(rail()).child(sidebar_panel(s))
+        } else {
+            // Narrow window: keep the rail (still lets the user toggle), drop
+            // the wide panel so it cannot eat the whole viewport.
+            row().key("sidebar").child(rail())
+        }
     } else {
         el().key("sidebar-hidden")
     };
@@ -452,6 +481,11 @@ pub fn view(s: &State, _cx: &mut Cx<State>) -> El {
         .w_full()
         .h_full()
         .fill(chrome_dark())
+        // Report the real window size back into state for responsive decisions.
+        .on_layout(|st: &mut State, r| {
+            st.viewport_w = r[2];
+            st.viewport_h = r[3];
+        })
         .child(toolbar(s))
         .child(
             row()
