@@ -63,6 +63,17 @@ Browser-style keyboard shortcuts work app-wide: `Cmd/Ctrl+T` new tab,
 back/forward, and `F5`/`Cmd/Ctrl+R` reload.Navigation stays non-blocking on
 every shortcut.
 
+### Clickable links in the page
+
+The render worker extracts every rendered `<a href>` together with its painted
+CSS-pixel rectangles and sends them to the UI as plain data. A primary click on
+the page is mapped back through the `pixels_fit(Fit)` letterbox into CSS
+coordinates (topmost region wins) and navigates the active tab — entirely in
+state, with no engine work on the UI thread. Relative URLs are resolved against
+the page's own URL; same-document (`#`), `javascript:` and `mailto:` links are
+ignored. This is covered by unit tests plus an end-to-end test that clicks a
+rendered link through the real view.
+
 Icons are vector paths (`Shape::fill_svg` / `stroke_svg`); colours are authored
 in OKLCH to match the dark, rounded reference chrome. Interactive controls use
 `.hover_fill()` and Rune's `motion::SNAPPY` spring.
@@ -92,9 +103,10 @@ a stale-result isolation check, loading-state lifecycle, Unicode titles, and
 timing assertions that clicks and tab switches stay non-blocking. Headless
 `Runtime` tests register the same `poll` callback the real app uses, so worker
 results are actually applied, toast show/expire lifecycle, UTF-8 tab titles,
-address-bar synchronisation on navigate/redirect, per-site tab titles, and
-the keyboard-shortcut suite. Full suite: 22 tests in ~2.5 s (down from ~174 s
-before navigation became asynchronous).
+address-bar synchronisation on navigate/redirect, per-site tab titles,
+the keyboard-shortcut suite, link extraction/resolution, Fit-letterbox mapping,
+and an end-to-end page-link click. Full suite: 26 tests in ~1.5 s (down from
+~174 s before navigation became asynchronous).
 
 ## Build & run
 

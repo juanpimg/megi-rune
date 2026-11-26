@@ -42,12 +42,129 @@ pub struct Space {
     pub tint: u32,
 }
 
+/// A clickable link region in CSS pixels, extracted from a rendered frame.
+/// Kept as plain data so it crosses the worker → UI channel cheaply and lets the
+/// UI hit-test a click without a round trip to the engine.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkRegion {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub href: String,
+}
+
+/// Collects every `<a href>` and its painted rectangles from a frame. Uses
+/// Megi's own `find_link_at` (which walks DOM ancestors) so text runs inside a
+/// link resolve to the anchor, then verifies the region actually belongs to
+/// that anchor to avoid picking up an overlapping link at the region centre.
+fn links_from_frame(frame: &megi_webview::WebFrame) -> Vec<LinkRegion> {
+    let doc = &frame.document;
+    let regions = &frame.hit_regions;
+    let mut links = Vec::new();
+    for region in regions {
+        let Some(node) = region.node_id else { continue };
+        if region.rect.width <= 0.0 || region.rect.height <= 0.0 {
+            continue;
+        }
+        let cx = region.rect.x + region.rect.width * 0.5;
+        let cy = region.rect.y + region.rect.height * 0.5;
+        let Some(link) = megi_webview::display::find_link_at(doc, regions, cx, cy) else {
+            continue;
+        };
+        // The <a> must be this region's node or one of its ancestors.
+        let mut cur = Some(node);
+        let mut belongs = false;
+        while let Some(n) = cur {
+            if n == link.node_id {
+                belongs = true;
+                break;
+            }
+            let parent = doc.node(n).parent;
+            cur = parent.filter(|p| doc.node(*p).as_element().is_some());
+        }
+        if !belongs {
+            continue;
+        }
+        let href = link.href.trim().to_owned();
+        let lower = href.to_ascii_lowercase();
+        // Anchors to the same document and script/mail links are not navigations.
+        if href.is_empty()
+            || href.starts_with('#')
+            || lower.starts_with("javascript:")
+            || lower.starts_with("mailto:")
+        {
+            continue;
+        }
+        links.push(LinkRegion {
+            x: region.rect.x,
+            y: region.rect.y,
+            w: region.rect.width,
+            h: region.rect.height,
+            href,
+        });
+    }
+    links
+}
+
+/// Resolves a raw `href` against the page's URL (the host's job per Megi's API).
+pub fn resolve_href(base: &str, href: &str) -> String {
+    let href = href.trim();
+    if href.is_empty() {
+        return base.to_owned();
+    }
+    let lower = href.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("data:") {
+        return href.to_owned();
+    }
+    let Some(scheme_end) = base.find("://") else {
+        return href.to_owned();
+    };
+    let scheme = &base[..scheme_end];
+    let after = &base[scheme_end + 3..];
+    let host_end = after.find('/').unwrap_or(after.len());
+    let host = &after[..host_end];
+    if let Some(rest) = href.strip_prefix("//") {
+        return format!("{scheme}://{rest}");
+    }
+    if href.starts_with('/') {
+        return format!("{scheme}://{host}{href}");
+    }
+    let mut segments: Vec<&str> = if host_end < after.len() {
+        after[host_end + 1..].split('/').collect()
+    } else {
+        Vec::new()
+    };
+    if !segments.is_empty() {
+        segments.pop(); // drop the document filename → directory
+    }
+    for seg in href.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            _ => segments.push(seg),
+        }
+    }
+    if segments.is_empty() {
+        format!("{scheme}://{host}/")
+    } else {
+        format!("{scheme}://{host}/{}", segments.join("/"))
+    }
+}
+
 /// A browser tab: only UI-side data lives here; the engine frame lives in the
 /// worker and its last rendered pixels are cached in `page` for instant swaps.
 pub struct Tab {
     pub id: u64,
     pub title: String,
     pub page: rune::Pixels,
+    /// Native size of the cached page frame (for CSS↔layout coordinate mapping).
+    pub page_w: u32,
+    pub page_h: u32,
+    /// Clickable link regions in CSS pixels, from the last rendered frame.
+    pub links: Vec<LinkRegion>,
     pub url_edit: TextEdit,
     pub loaded_url: String,
     pub nav_error: Option<String>,
@@ -84,6 +201,7 @@ struct NavResult {
     rgba: Option<Vec<u8>>,
     width: u32,
     height: u32,
+    links: Vec<LinkRegion>,
     error: Option<String>,
 }
 
@@ -152,6 +270,7 @@ fn spawn_worker(results: Sender<NavResult>, requests: Receiver<NavRequest>) {
                     rgba: None,
                     width: PAGE_W,
                     height: PAGE_H,
+                    links: Vec::new(),
                     error: None,
                 };
                 // Normalise every outcome to Option<&WebFrame> + optional error.
@@ -173,6 +292,7 @@ fn spawn_worker(results: Sender<NavResult>, requests: Receiver<NavRequest>) {
                         result.width = f.pixmap.width;
                         result.height = f.pixmap.height;
                         result.rgba = Some(f.pixmap.to_rgba_bytes());
+                        result.links = links_from_frame(f);
                     }
                     None => {
                         if let Some(e) = error {
@@ -209,6 +329,10 @@ pub struct State {
     /// wide sidebar on narrow windows).
     pub viewport_w: f32,
     pub viewport_h: f32,
+    /// Laid-out rect `[x, y, w, h]` of the page element (reported by its
+    /// `on_layout`), used to map a click back into the frame's CSS coordinates
+    /// (replicating Rune's `pixels_fit(Fit)` letterbox).
+    pub page_rect: [f32; 4],
     /// A short transient message shown as a toast for action feedback (share,
     /// settings, menu, etc.), with the frame clock deadline at which it expires.
     pub toast: Option<(String, f64)>,
@@ -228,6 +352,38 @@ impl State {
             return true;
         }
         false
+    }
+
+    /// Maps a click inside the page element (in the element's own layout
+    /// points) into the frame's CSS-pixel coordinates, matching Rune's
+    /// `pixels_fit(..., Fit)` placement (centred, aspect-preserving, letterboxed).
+    /// Returns the resolved URL of the topmost link under the point, if any.
+    pub fn link_at_local(&self, local_x: f32, local_y: f32) -> Option<String> {
+        let tab = self.tab();
+        let [_, _, nw, nh] = self.page_rect;
+        let (sw, sh) = (tab.page_w as f32, tab.page_h as f32);
+        if sw <= 0.0 || sh <= 0.0 || nw <= 0.0 || nh <= 0.0 {
+            return None;
+        }
+        // Replicate image_rect(source, Fit, CENTRED): scale = min(nw/sw, nh/sh),
+        // centred on both axes (share 0.5). `local_x/y` are already relative to
+        // the element's own top-left, so we must NOT add the element's window
+        // position (nx, ny) here — that would offset every click by the toolbar
+        // and sidebar width in the real app.
+        let scale = (nw / sw).min(nh / sh);
+        let drawn_w = sw * scale;
+        let drawn_h = sh * scale;
+        let origin_x = (nw - drawn_w) * 0.5;
+        let origin_y = (nh - drawn_h) * 0.5;
+        let css_x = (local_x - origin_x) / scale;
+        let css_y = (local_y - origin_y) / scale;
+        // Links are painted in order; the last containing region wins, matching
+        // Megi's own hit_test semantics (topmost paint = topmost link).
+        tab.links
+            .iter()
+            .rev()
+            .find(|l| css_x >= l.x && css_x < l.x + l.w && css_y >= l.y && css_y < l.y + l.h)
+            .map(|l| resolve_href(&tab.loaded_url, &l.href))
     }
 }
 
@@ -329,6 +485,9 @@ fn initial_tab(id: u64) -> Tab {
         id,
         title: "Historia de España".to_owned(),
         page,
+        page_w: *w,
+        page_h: *h,
+        links: Vec::new(),
         url_edit: TextEdit::new("https://es.wikipedia.org"),
         loaded_url: start_url(),
         nav_error: None,
@@ -427,6 +586,7 @@ impl Default for State {
             results: res_rx,
             viewport_w: 1280.0,
             viewport_h: 800.0,
+            page_rect: [0.0; 4],
             toast: None,
         }
     }
@@ -541,6 +701,9 @@ impl State {
             } else {
                 if let Some(rgba) = result.rgba {
                     tab.page.set(result.width, result.height, rgba);
+                    tab.page_w = result.width;
+                    tab.page_h = result.height;
+                    tab.links = result.links.clone();
                 }
                 if let Some(url) = result.url {
                     tab.loaded_url = url.clone();
@@ -571,6 +734,9 @@ impl State {
             Ok(frame) => {
                 let tab = self.tab_mut();
                 update_pixels(&tab.page, frame);
+                tab.page_w = frame.pixmap.width;
+                tab.page_h = frame.pixmap.height;
+                tab.links = links_from_frame(frame);
                 tab.loaded_url = frame.url.clone();
                 tab.url_edit.replace_text(display_url(&frame.url));
                 tab.title = title_from_url(&frame.url);

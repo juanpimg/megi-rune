@@ -540,7 +540,21 @@ fn content_pane(s: &State) -> El {
         // `Fit` preserves the engine frame's aspect ratio, so resizing the
         // window letterboxes instead of stretching the article sideways.
         .pixels_fit(&s.tab().page, rune::SurfaceFit::Fit)
-        .min_h(0.0);
+        .min_h(0.0)
+        // Record where the page is laid out so a click can be mapped back into
+        // CSS pixels (the Fit letterbox is computed in `State::link_at_local`).
+        .on_layout(|st: &mut State, r: [f32; 4]| st.page_rect = r)
+        // Clicking a rendered link navigates, just like a real browser. The
+        // hit-test is pure state work — no engine render on the UI thread.
+        .on_any_press(|st: &mut State, btn, p: rune::PointerEvent, _tx| {
+            // Only the primary button navigates; right/middle clicks stay free
+            // for context menus and "open in new tab" in a future revision.
+            if btn == rune::PointerButton::Primary
+                && let Some(url) = st.link_at_local(p.x, p.y)
+            {
+                st.navigate(&url);
+            }
+        });
 
     let mut pane = col()
         .key("content")

@@ -459,6 +459,111 @@ fn address_bar_follows_navigation_and_redirects() {
 }
 
 #[test]
+fn link_regions_are_extracted_and_resolved() {
+    // A rendered page with a real absolute link must yield a clickable region
+    // in CSS pixels, and `link_at_local` must resolve a click on it.
+    let mut st = crate::state::State::default();
+    st.navigate_blocking(
+        "data:text/html,<a href='https://example.org/dest' style='font-size:40px'>ENLACE</a>",
+    );
+    assert!(
+        !st.tab().links.is_empty(),
+        "a rendered <a> yields link regions"
+    );
+    let link = st.tab().links[0].clone();
+    assert_eq!(link.href, "https://example.org/dest");
+
+    // Simulate a click exactly at the link's centre with a page element that
+    // fills the frame at 1:1 (page_rect == frame size, placed at origin).
+    st.page_rect = [0.0, 0.0, st.tab().page_w as f32, st.tab().page_h as f32];
+    let cx = link.x + link.w * 0.5;
+    let cy = link.y + link.h * 0.5;
+    assert_eq!(
+        st.link_at_local(cx, cy).as_deref(),
+        Some("https://example.org/dest"),
+        "clicking the link centre resolves its absolute href"
+    );
+    assert!(
+        st.link_at_local(-100.0, -100.0).is_none(),
+        "clicks outside the links hit nothing"
+    );
+}
+
+#[test]
+fn hit_testing_respects_fit_letterbox() {
+    // When the page element is wider than the frame's aspect ratio, Fit adds
+    // horizontal letterbox bars. A click must be shifted by that offset before
+    // hitting the link, otherwise the mapping is wrong.
+    let mut st = crate::state::State::default();
+    st.navigate_blocking(
+        "data:text/html,<a href='https://example.org/x' style='font-size:40px'>X</a>",
+    );
+    let link = st.tab().links[0].clone();
+    let (sw, sh) = (st.tab().page_w as f32, st.tab().page_h as f32);
+    // Element is twice as wide as the frame → scale = min(2, 1) = 1,
+    // drawn w = sw, so the frame is centred with (nw - sw)/2 on the left.
+    let nw = sw * 2.0;
+    let nh = sh;
+    st.page_rect = [0.0, 0.0, nw, nh];
+    let local_x = (nw - sw) * 0.5 + link.x + link.w * 0.5;
+    let local_y = link.y + link.h * 0.5;
+    assert_eq!(
+        st.link_at_local(local_x, local_y).as_deref(),
+        Some("https://example.org/x"),
+        "letterbox offset is accounted for"
+    );
+}
+
+#[test]
+fn relative_links_resolve_against_base() {
+    let base = "https://es.wikipedia.org/wiki/Historia_de_España";
+    assert_eq!(
+        crate::state::resolve_href(base, "/wiki/Andalucía"),
+        "https://es.wikipedia.org/wiki/Andalucía"
+    );
+    assert_eq!(
+        crate::state::resolve_href(base, "Fenicia"),
+        "https://es.wikipedia.org/wiki/Fenicia"
+    );
+    assert_eq!(
+        crate::state::resolve_href(base, "//otro.example.com/x"),
+        "https://otro.example.com/x"
+    );
+    assert_eq!(
+        crate::state::resolve_href(base, "https://absolute.test/z"),
+        "https://absolute.test/z"
+    );
+}
+
+#[test]
+fn clicking_page_link_navigates_in_real_view() {
+    // End-to-end: render a page with a link through the real view, click it at
+    // the correct window position, and check the tab navigates to the href.
+    let mut rt = rt((1280.0, 800.0));
+    rt.state.navigate_blocking(
+        "data:text/html,<a href='https://example.org/go' style='font-size:48px'>GO</a>",
+    );
+    rt.frame(1.0 / 60.0); // let on_layout report the page rect
+    let link = rt.state.tab().links[0].clone();
+    let [px, py, pw, ph] = rt.state.page_rect;
+    assert!(pw > 0.0 && ph > 0.0, "page element has a laid-out rect");
+    let (sw, sh) = (rt.state.tab().page_w as f32, rt.state.tab().page_h as f32);
+    let scale = (pw / sw).min(ph / sh);
+    let origin_x = px + (pw - sw * scale) * 0.5;
+    let origin_y = py + (ph - sh * scale) * 0.5;
+    let click_x = origin_x + (link.x + link.w * 0.5) * scale;
+    let click_y = origin_y + (link.y + link.h * 0.5) * scale;
+    rt.pointer_down(click_x, click_y);
+    rt.pointer_up(click_x, click_y);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(
+        rt.state.tab().loaded_url,
+        "https://example.org/go",
+        "clicking a rendered link navigates the active tab"
+    );
+}
+
+#[test]
 fn loading_state_sets_and_clears_around_navigation() {
     let mut rt = rt((1280.0, 800.0));
     // A data: URL renders fast on the worker; poll until the flag clears.
