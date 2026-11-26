@@ -30,12 +30,23 @@ carry a generation number, so a burst of rapid clicks settles on the newest
 page instead of flickering through stale results. `back`/`forward`/`reload` run
 on the worker's own history, staying in sync with what was rendered.
 
+Each tab has an independent `WebView` on the worker (keyed by a never-reused id),
+so results from a closed tab are discarded and cannot repaint a different tab.
+The start page's RGBA bytes are rendered once and cached, so opening a tab just
+copies bytes into a fresh `Pixels` handle — no `WebView` is created on the UI
+thread. `Tab.loading` flips true on request and false when the newest result is
+applied, driving the progress line.
+
 ## Layout
 
 The view recreates the reference Arc-style browser chrome:
 
 - top toolbar: traffic lights, sidebar toggle, back/forward/reload, a centred
   capsule address bar with a lock icon, and settings/share/new-tab/menu buttons;
+- tab strip: one tab per page with its own engine `WebView` and history; click a
+  tab to switch instantly (cached pixels, no engine work), `+` opens a new tab,
+  `×` closes one. Capped at `MAX_TABS` (12). A 2px accent line under the strip
+  shows a load in progress while the worker renders off-thread;
 - left rail: icon strip with spaces, folders, share, add at the top and
   settings, books, help, avatar at the bottom;
 - left panel: **Espacios** and **Favoritos** grids plus a bookmark list, all
@@ -66,9 +77,12 @@ inactive tiles so switching spaces never shifts the row's layout.
 `crates/shell/src/stress.rs` hammers the UI the way a user would: every toolbar
 control pressed repeatedly, sidebar toggled mid-click, 12 viewport sizes from
 1×1 to 4K/ultrawide, resize while the sidebar flips, rapid bookmark/space
-navigation, wheel scrolling, garbage URL input, and a timing assertion that
-clicks stay non-blocking. Full suite runs in ~1 s (down from ~174 s before
-navigation became asynchronous).
+navigation, wheel scrolling, garbage URL input, tab create/switch/close hammering,
+a stale-result isolation check, loading-state lifecycle, Unicode titles, and
+timing assertions that clicks and tab switches stay non-blocking. Headless
+`Runtime` tests register the same `poll` callback the real app uses, so worker
+results are actually applied. Full suite: 18 tests in ~2 s (down from ~174 s
+before navigation became asynchronous).
 
 ## Build & run
 

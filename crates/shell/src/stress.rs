@@ -13,6 +13,9 @@ use crate::view::view;
 
 fn rt(size: (f32, f32)) -> Runtime<State> {
     let mut runtime = Runtime::new(State::default(), view, size, Env::new(true, 1.0));
+    // `rune::run` wires AppSpec::poll automatically; a bare headless Runtime
+    // does not, so register the same callback to mirror the real app exactly.
+    runtime.poll = Some(crate::state::poll);
     runtime.frame(0.0);
     runtime
 }
@@ -159,7 +162,7 @@ fn url_bar_enter_with_garbage_is_survivable() {
     // Garbage input: committing it must not panic or freeze. Because navigation
     // is now asynchronous, a load error only appears after poll drains the
     // worker result, so give it a few frames.
-    rt.state.url_edit.replace_text("not a url !!!");
+    rt.state.tab_mut().url_edit.replace_text("not a url !!!");
     rt.key(KeyEvent::from(Key::Enter));
     for _ in 0..5 {
         rt.frame(1.0 / 60.0);
@@ -214,4 +217,144 @@ fn blocking_navigation_updates_page_for_snapshots() {
     rt.state.navigate_blocking("data:text/html,<h1>OK</h1>");
     rt.frame(0.0);
     assert!(rt.find("page").is_some());
+}
+
+#[test]
+fn creating_and_switching_tabs_never_panics() {
+    let mut rt = rt((1280.0, 800.0));
+    // Hammer the new-tab button past the cap; extra clicks must be no-ops.
+    for _ in 0..40 {
+        if let Some((x, y)) = rt.find("tab-new") {
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+        }
+        rt.frame(1.0 / 60.0);
+    }
+    assert!(
+        rt.state.tabs.len() <= crate::state::MAX_TABS,
+        "tab count is bounded"
+    );
+    assert!(
+        rt.state.active_tab < rt.state.tabs.len(),
+        "active index stays valid"
+    );
+    // Switch through every tab by clicking its strip element.
+    let ids: Vec<u64> = rt.state.tabs.iter().map(|t| t.id).collect();
+    for id in ids {
+        let key = format!("tab-{id}");
+        if let Some((x, y)) = rt.find(&key) {
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+        }
+        rt.frame(1.0 / 60.0);
+        assert!(rt.find("page").is_some());
+    }
+}
+
+#[test]
+fn closing_tabs_keeps_at_least_one_and_valid_index() {
+    let mut rt = rt((1280.0, 800.0));
+    for _ in 0..5 {
+        if let Some((x, y)) = rt.find("tab-new") {
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+        }
+        rt.frame(1.0 / 60.0);
+    }
+    let count = rt.state.tabs.len();
+    // Click every close button repeatedly, including the last remaining tab.
+    for _ in 0..count + 5 {
+        let id = rt.state.tabs.first().map(|t| t.id);
+        if let Some(id) = id {
+            let key = format!("tab-close-{id}");
+            if let Some((x, y)) = rt.find(&key) {
+                rt.pointer_down(x, y);
+                rt.pointer_up(x, y);
+            }
+        }
+        rt.frame(1.0 / 60.0);
+        assert!(!rt.state.tabs.is_empty(), "at least one tab survives");
+        assert!(rt.state.active_tab < rt.state.tabs.len(), "index valid");
+    }
+}
+
+#[test]
+fn tab_switch_is_non_blocking_and_preserves_each_tabs_url() {
+    use std::time::Instant;
+    let mut rt = rt((1280.0, 800.0));
+    // Open a second tab, then give each a distinct URL string in state.
+    rt.state.new_tab();
+    let first_id = rt.state.tabs[0].id;
+    let second_id = rt.state.tabs[1].id;
+    rt.state.tabs[0].loaded_url = "first://page".to_owned();
+    rt.state.tabs[1].loaded_url = "second://page".to_owned();
+    let start = Instant::now();
+    for _ in 0..50 {
+        rt.state.select_tab(first_id);
+        rt.state.select_tab(second_id);
+        rt.frame(1.0 / 240.0);
+    }
+    assert!(
+        start.elapsed().as_millis() < 500,
+        "switching tabs blocked the UI thread"
+    );
+    assert!(rt.state.tabs.iter().any(|t| t.loaded_url == "first://page"));
+    assert!(
+        rt.state
+            .tabs
+            .iter()
+            .any(|t| t.loaded_url == "second://page")
+    );
+}
+
+#[test]
+fn unicode_titles_never_panic_the_view() {
+    // A tab title with multi-byte characters used to be sliced at byte 19,
+    // which can land inside a UTF-8 sequence and panic. Build such a title and
+    // force a layout through the real view.
+    let mut rt = rt((1280.0, 800.0));
+    rt.state.tab_mut().title = "Ñandú — historia de España y más texto aquí".to_owned();
+    rt.frame(1.0 / 60.0);
+    assert!(
+        rt.find("page").is_some(),
+        "view survives a Unicode tab title"
+    );
+}
+
+#[test]
+fn loading_state_sets_and_clears_around_navigation() {
+    let mut rt = rt((1280.0, 800.0));
+    // A data: URL renders fast on the worker; poll until the flag clears.
+    rt.state.navigate("data:text/html,<h1>loading test</h1>");
+    assert!(
+        rt.state.tab().loading,
+        "loading is set synchronously on request"
+    );
+    let mut settled = false;
+    for _ in 0..600 {
+        rt.frame(1.0 / 60.0);
+        if !rt.state.tab().loading {
+            settled = true;
+            break;
+        }
+    }
+    assert!(settled, "loading clears once the worker result is applied");
+    assert!(rt.find("page").is_some());
+}
+
+#[test]
+fn stale_tab_results_cannot_pollute_a_new_tab() {
+    let mut rt = rt((1280.0, 800.0));
+    // Queue a navigation, then immediately close that tab and open another.
+    rt.state.navigate("https://example.invalid");
+    let old_id = rt.state.tab().id;
+    rt.state.new_tab();
+    let new_id = rt.state.tab().id;
+    rt.state.close_tab(old_id);
+    for _ in 0..10 {
+        rt.frame(1.0 / 60.0);
+    }
+    // The surviving tab must not show the closed tab's error/url.
+    assert_eq!(rt.state.tab().id, new_id);
+    assert!(rt.state.tab().nav_error.is_none());
 }

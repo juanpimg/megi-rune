@@ -2,11 +2,13 @@
 //!
 //! Navigation is asynchronous: Megi's `WebView::load` renders synchronously
 //! (and can block on the network), so doing it inside a Rune `on_press` handler
-//! freezes the UI thread for seconds. Instead, a background worker owns its own
-//! `WebView`, renders there, and posts the resulting pixels back through a
-//! channel. `State::poll` drains finished navigations and repaints — the UI
-//! thread never blocks.
+//! freezes the UI thread for seconds. Instead, a background worker owns one
+//! `WebView` **per tab**, renders there, and posts the resulting pixels back
+//! through a channel. Each tab keeps its own page and history, so switching
+//! tabs is an instant pixel swap with no engine work on the UI thread.
 
+use std::collections::HashMap;
+use std::sync::OnceLock;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -15,12 +17,16 @@ use megi_webview::net::base64_encode;
 use megi_webview::{WebView, WebViewOptions};
 use rune::{TextEdit, Tx};
 
-use crate::bridge::frame_to_pixels;
+use crate::bridge::{frame_to_pixels, update_pixels};
 
 /// Width/height of the engine viewport. Content is later scaled into the
 /// shell's centre pane by Rune.
 pub const PAGE_W: u32 = 1120;
 pub const PAGE_H: u32 = 820;
+
+/// Maximum number of tabs. Bounded so a click-happy user cannot grow the
+/// worker's `Vec<WebView>` (and its frame buffers) without limit.
+pub const MAX_TABS: usize = 12;
 
 /// One bookmark/favourite tile in the sidebar.
 pub struct Favourite {
@@ -36,8 +42,24 @@ pub struct Space {
     pub tint: u32,
 }
 
-/// What the worker should render. Back/forward/reload operate on the worker's
-/// own WebView history, so they always stay in sync with what it rendered.
+/// A browser tab: only UI-side data lives here; the engine frame lives in the
+/// worker and its last rendered pixels are cached in `page` for instant swaps.
+pub struct Tab {
+    pub id: u64,
+    pub title: String,
+    pub page: rune::Pixels,
+    pub url_edit: TextEdit,
+    pub loaded_url: String,
+    pub nav_error: Option<String>,
+    /// True between a navigation request and its result being applied, so the
+    /// view can show a spinner/dimming while the worker renders off-thread.
+    pub loading: bool,
+    /// Incremented on every request; results older than this are ignored.
+    pub generation: u64,
+}
+
+/// What the worker should render. Back/forward/reload operate on the tab's own
+/// WebView history, so they always stay in sync with what it rendered.
 #[derive(Clone)]
 enum NavTarget {
     Url(String),
@@ -46,16 +68,17 @@ enum NavTarget {
     Reload,
 }
 
-/// A request posted to the render worker, tagged so stale results can be
-/// discarded when the user navigates several times quickly.
+/// A request posted to the render worker.
 #[derive(Clone)]
 struct NavRequest {
+    tab_id: u64,
     target: NavTarget,
     generation: u64,
 }
 
 /// A finished navigation posted back from the render worker.
 struct NavResult {
+    tab_id: u64,
     generation: u64,
     url: Option<String>,
     rgba: Option<Vec<u8>>,
@@ -65,56 +88,65 @@ struct NavResult {
 }
 
 /// A cloneable handle the view's `on_press` closures use to request navigation.
-/// `Arc<Mutex<_>>` lets `'static` closures share the channel sender.
+/// `Arc<Mutex<_>>` lets `'static` closures share the channel sender and the
+/// per-tab generation counters.
 #[derive(Clone)]
 pub struct NavSender {
     tx: Arc<Mutex<Sender<NavRequest>>>,
-    generation: Arc<Mutex<u64>>,
+    generations: Arc<Mutex<HashMap<u64, u64>>>,
 }
 
 impl NavSender {
-    fn send(&self, target: NavTarget) {
-        let mut counter = self.generation.lock().expect("generation mutex poisoned");
-        *counter += 1;
-        let request = NavRequest {
-            target,
-            generation: *counter,
+    fn send(&self, tab_id: u64, target: NavTarget) {
+        let generation = {
+            let mut map = self.generations.lock().expect("generation mutex poisoned");
+            let counter = map.entry(tab_id).or_insert(0);
+            *counter += 1;
+            *counter
         };
-        drop(counter);
         if let Ok(tx) = self.tx.lock() {
-            let _ = tx.send(request);
+            let _ = tx.send(NavRequest {
+                tab_id,
+                target,
+                generation,
+            });
         }
     }
 
     /// Queues a URL for rendering. Non-blocking: never touches the engine here.
-    pub fn request(&self, url: &str) {
-        self.send(NavTarget::Url(url.to_owned()));
+    pub fn request(&self, tab_id: u64, url: &str) {
+        self.send(tab_id, NavTarget::Url(url.to_owned()));
     }
-    pub fn back(&self) {
-        self.send(NavTarget::Back);
+    pub fn back(&self, tab_id: u64) {
+        self.send(tab_id, NavTarget::Back);
     }
-    pub fn forward(&self) {
-        self.send(NavTarget::Forward);
+    pub fn forward(&self, tab_id: u64) {
+        self.send(tab_id, NavTarget::Forward);
     }
-    pub fn reload(&self) {
-        self.send(NavTarget::Reload);
+    pub fn reload(&self, tab_id: u64) {
+        self.send(tab_id, NavTarget::Reload);
     }
 }
 
-/// Spawns the background render worker. It owns a `WebView` with the same
-/// viewport and renders requests one at a time, posting each result back.
+/// Spawns the background render worker. It owns one `WebView` per tab, renders
+/// requests one at a time, and posts each result back. Tabs are created lazily:
+/// the worker keeps a `HashMap<u64, WebView>` and primes every new tab with the
+/// built-in start page so history commands work immediately.
 fn spawn_worker(results: Sender<NavResult>, requests: Receiver<NavRequest>) {
     thread::Builder::new()
         .name("megi-render".to_owned())
         .spawn(move || {
-            let opts = WebViewOptions::new(PAGE_W, PAGE_H).expect("valid viewport dimensions");
-            let mut web = WebView::new(opts).expect("engine initialises");
-            // Prime the worker's URL history so back/forward work there too.
-            let start = start_url();
-            let _ = web.load(&start);
-
+            let mut views: HashMap<u64, WebView> = HashMap::new();
             while let Ok(req) = requests.recv() {
+                let web = views.entry(req.tab_id).or_insert_with(|| {
+                    let opts =
+                        WebViewOptions::new(PAGE_W, PAGE_H).expect("valid viewport dimensions");
+                    let mut web = WebView::new(opts).expect("engine initialises");
+                    let _ = web.load(&start_url());
+                    web
+                });
                 let mut result = NavResult {
+                    tab_id: req.tab_id,
                     generation: req.generation,
                     url: None,
                     rgba: None,
@@ -159,11 +191,12 @@ fn spawn_worker(results: Sender<NavResult>, requests: Receiver<NavRequest>) {
 
 /// The whole UI state, owned by `rune::run` and handed to `view`.
 pub struct State {
-    pub page: rune::Pixels,
-    pub url_edit: TextEdit,
-    pub loaded_url: String,
+    pub tabs: Vec<Tab>,
+    pub active_tab: usize,
+    /// Monotonic id source; ids are never reused, so a queued result for a
+    /// closed tab cannot be applied to a newly opened one.
+    next_tab_id: u64,
     pub sidebar_open: bool,
-    pub nav_error: Option<String>,
     pub spaces: Vec<Space>,
     pub active_space: usize,
     pub favourites: Vec<Favourite>,
@@ -171,9 +204,6 @@ pub struct State {
     pub nav: NavSender,
     /// Results from the render worker, drained by `poll`.
     results: Receiver<NavResult>,
-    /// Generation of the most recently *applied* result; stale ones are dropped
-    /// so rapid back/forward/click sequences cannot show an outdated page.
-    applied_generation: u64,
     /// Latest window size in logical points, reported by `on_layout` on the
     /// root element. Used for responsive breakpoints (e.g. collapsing the
     /// wide sidebar on narrow windows).
@@ -195,19 +225,42 @@ fn start_url() -> String {
     )
 }
 
-impl Default for State {
-    fn default() -> Self {
-        // Initial frame is rendered synchronously once, at startup, so the
-        // first paint has content. Every later navigation uses the worker.
+/// Renders the built-in start page exactly once (lazily) and caches its raw
+/// RGBA bytes. New tabs copy these bytes into their own `Pixels` handle, so
+/// opening a tab is instant and never creates a `WebView` on the UI thread.
+fn start_page_bytes() -> &'static (u32, u32, Vec<u8>) {
+    static CACHE: OnceLock<(u32, u32, Vec<u8>)> = OnceLock::new();
+    CACHE.get_or_init(|| {
         let opts = WebViewOptions::new(PAGE_W, PAGE_H).expect("valid viewport dimensions");
         let mut web = WebView::new(opts).expect("engine initialises");
-        let start = start_url();
         let frame = web
-            .load(&start)
+            .load(&start_url())
             .expect("the built-in start page always renders");
-        let page = frame_to_pixels(frame);
-        let loaded_url = frame.url.clone();
+        let pixels = frame_to_pixels(frame);
+        let (w, h, rgba) = pixels.to_rgba().expect("the cached start page has pixels");
+        (w, h, rgba)
+    })
+}
 
+/// Builds a tab showing the built-in start page, reusing the cached bytes.
+fn initial_tab(id: u64) -> Tab {
+    let (w, h, rgba) = start_page_bytes();
+    let page = rune::Pixels::new();
+    page.set(*w, *h, rgba.clone());
+    Tab {
+        id,
+        title: "Historia de España".to_owned(),
+        page,
+        url_edit: TextEdit::new("https://es.wikipedia.org"),
+        loaded_url: start_url(),
+        nav_error: None,
+        loading: false,
+        generation: 0,
+    }
+}
+
+impl Default for State {
+    fn default() -> Self {
         let spaces = vec![
             Space {
                 label: "Personal",
@@ -282,20 +335,18 @@ impl Default for State {
         spawn_worker(res_tx, req_rx);
 
         Self {
-            page,
-            url_edit: TextEdit::new("https://es.wikipedia.org"),
-            loaded_url,
+            tabs: vec![initial_tab(1)],
+            active_tab: 0,
+            next_tab_id: 2,
             sidebar_open: true,
-            nav_error: None,
             spaces,
             active_space: 0,
             favourites,
             nav: NavSender {
                 tx: Arc::new(Mutex::new(req_tx)),
-                generation: Arc::new(Mutex::new(0)),
+                generations: Arc::new(Mutex::new(HashMap::new())),
             },
             results: res_rx,
-            applied_generation: 0,
             viewport_w: 1280.0,
             viewport_h: 800.0,
         }
@@ -303,33 +354,89 @@ impl Default for State {
 }
 
 impl State {
-    /// Requests navigation without blocking the caller.
+    /// Convenience access to the currently displayed tab.
+    pub fn tab(&self) -> &Tab {
+        &self.tabs[self.active_tab]
+    }
+    pub fn tab_mut(&mut self) -> &mut Tab {
+        let i = self.active_tab;
+        &mut self.tabs[i]
+    }
+
+    /// Opens a new tab with the built-in start page. Bounded by `MAX_TABS`.
+    /// The initial pixels are rendered synchronously once so the swap is
+    /// instant; all later navigation in that tab stays asynchronous.
+    pub fn new_tab(&mut self) {
+        if self.tabs.len() >= MAX_TABS {
+            return;
+        }
+        let id = self.next_tab_id;
+        self.next_tab_id += 1;
+        self.tabs.push(initial_tab(id));
+        self.active_tab = self.tabs.len() - 1;
+    }
+
+    /// Closes a tab by id, keeping at least one tab open. Queued results for
+    /// the closed id are discarded in `poll_navigation` (their tab no longer
+    /// exists), so they cannot be applied to another tab.
+    pub fn close_tab(&mut self, id: u64) {
+        if self.tabs.len() <= 1 {
+            return;
+        }
+        if let Some(pos) = self.tabs.iter().position(|t| t.id == id) {
+            self.tabs.remove(pos);
+            if self.active_tab >= self.tabs.len() {
+                self.active_tab = self.tabs.len() - 1;
+            } else if self.active_tab > pos {
+                self.active_tab -= 1;
+            }
+        }
+    }
+
+    /// Selects a tab by id. This only swaps which cached page is painted — no
+    /// engine work happens on the UI thread, so switching is instant.
+    pub fn select_tab(&mut self, id: u64) {
+        if let Some(pos) = self.tabs.iter().position(|t| t.id == id) {
+            self.active_tab = pos;
+        }
+    }
+
+    /// Requests navigation on the active tab without blocking the caller.
     pub fn navigate(&mut self, url: &str) {
+        let tab = self.tab_mut();
         let target = if url.trim().is_empty() {
             start_url()
         } else {
             url.to_owned()
         };
         // Reflect the intent immediately in the URL bar and clear stale errors.
-        self.nav_error = None;
-        self.loaded_url = target.clone();
-        self.nav.request(&target);
+        tab.nav_error = None;
+        tab.loaded_url = target.clone();
+        tab.loading = true;
+        let id = tab.id;
+        self.nav.request(id, &target);
     }
 
     pub fn back(&mut self) {
-        self.nav.back();
+        let id = self.tab().id;
+        self.tab_mut().loading = true;
+        self.nav.back(id);
     }
     pub fn forward(&mut self) {
-        self.nav.forward();
+        let id = self.tab().id;
+        self.tab_mut().loading = true;
+        self.nav.forward(id);
     }
     pub fn reload(&mut self) {
-        self.nav.reload();
+        let id = self.tab().id;
+        self.tab_mut().loading = true;
+        self.nav.reload(id);
     }
 
     pub fn commit_url_bar(&mut self) {
         // Accept the raw text: load errors are reported through `nav_error`,
         // so an invalid URL must never panic or freeze the shell.
-        let typed = self.url_edit.text.clone();
+        let typed = self.tab().url_edit.text.clone();
         self.navigate(&typed);
     }
 
@@ -338,45 +445,49 @@ impl State {
     pub fn poll_navigation(&mut self) -> bool {
         let mut changed = false;
         while let Ok(result) = self.results.try_recv() {
-            // Drain the whole queue and keep only the newest generation: a
-            // burst of rapid clicks settles on the last requested page.
-            if result.generation < self.applied_generation {
+            // Locate the tab by id. Results for closed tabs are ignored.
+            let Some(pos) = self.tabs.iter().position(|t| t.id == result.tab_id) else {
+                continue;
+            };
+            let tab = &mut self.tabs[pos];
+            // Drop stale results: a burst of rapid clicks settles on the last.
+            if result.generation < tab.generation {
                 continue;
             }
-            self.applied_generation = result.generation;
+            tab.generation = result.generation;
             if let Some(err) = &result.error {
-                self.nav_error = Some(err.clone());
+                tab.nav_error = Some(err.clone());
             } else {
                 if let Some(rgba) = result.rgba {
-                    self.page.set(result.width, result.height, rgba);
+                    tab.page.set(result.width, result.height, rgba);
                 }
                 if let Some(url) = result.url {
-                    self.loaded_url = url;
+                    tab.loaded_url = url;
                 }
-                self.nav_error = None;
+                tab.nav_error = None;
             }
+            // Only the newest result settles the loading state; older results
+            // for the same tab were skipped above by the generation guard.
+            tab.loading = false;
             changed = true;
         }
         changed
     }
 
-    /// Synchronously applies a navigation, for tests and headless snapshots
-    /// that must see the result in the same frame.
+    /// Synchronously applies a navigation on the active tab, for tests and
+    /// headless snapshots that must see the result in the same frame.
     pub fn navigate_blocking(&mut self, url: &str) {
         let opts = WebViewOptions::new(PAGE_W, PAGE_H).expect("valid viewport dimensions");
         let mut web = WebView::new(opts).expect("engine initialises");
         match web.load(url) {
             Ok(frame) => {
-                self.page.set(
-                    frame.pixmap.width,
-                    frame.pixmap.height,
-                    frame.pixmap.to_rgba_bytes(),
-                );
-                self.loaded_url = frame.url.clone();
-                self.nav_error = None;
+                let tab = self.tab_mut();
+                update_pixels(&tab.page, frame);
+                tab.loaded_url = frame.url.clone();
+                tab.nav_error = None;
             }
             Err(e) => {
-                self.nav_error = Some(format!("{e}"));
+                self.tab_mut().nav_error = Some(format!("{e}"));
             }
         }
     }

@@ -26,6 +26,25 @@ fn accent() -> Color {
     oklch(0.62, 0.16, 275.0)
 }
 
+/// First Unicode scalar of a label, or an empty string. Slicing `&s[..1]` would
+/// panic on multi-byte first characters (e.g. "Ñandú"), so iterate by chars.
+fn first_char(s: &str) -> String {
+    s.chars().next().map(String::from).unwrap_or_default()
+}
+
+/// Truncates to at most `max` characters, appending an ellipsis when cut.
+/// Char-aware so a Unicode title like "Historia de España" cannot be split
+/// inside a multi-byte sequence.
+fn truncate_chars(s: &str, max: usize) -> String {
+    let mut chars = s.chars();
+    let head: String = chars.by_ref().take(max).collect();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
 /// A small vector icon drawn from an SVG path inside a `size×size` element.
 fn icon(path: &'static str, size: f32, color: Color, stroke: bool) -> El {
     let shape = if stroke {
@@ -162,7 +181,9 @@ fn action_forward(s: &mut State) {
 fn action_reload(s: &mut State) {
     s.reload();
 }
-fn action_new_tab(_s: &mut State) {}
+fn action_new_tab(s: &mut State) {
+    s.new_tab();
+}
 fn action_share(_s: &mut State) {}
 fn action_settings(_s: &mut State) {}
 fn action_menu(_s: &mut State) {}
@@ -182,7 +203,7 @@ fn address_bar(s: &State) -> El {
         .gap(8.0)
         .child(lock_icon())
         .child(
-            text_input(&s.url_edit, type_::BODY)
+            text_input(&s.tab().url_edit, type_::BODY)
                 .key("url-input")
                 .grow(1.0)
                 .color(muted())
@@ -235,6 +256,71 @@ fn toolbar(s: &State) -> El {
     }
 }
 
+/// A row of browser tabs between the toolbar and the content. Each tab shows a
+/// short title, is clickable to switch instantly, and has a small close button.
+fn tab_strip(s: &State) -> El {
+    let mut strip = row()
+        .key("tab-strip")
+        .w_full()
+        .h(38.0)
+        .fill(chrome_dark())
+        .items_center()
+        .px(12.0)
+        .gap(6.0);
+
+    for (i, tab) in s.tabs.iter().enumerate() {
+        let active = i == s.active_tab;
+        let id = tab.id;
+        let title = truncate_chars(&tab.title, 20);
+        // A single keyed element per tab: pressing it selects the tab (instant
+        // cached-pixel swap). The close "×" is a separate element inside with
+        // its own handler and key so tests and users can target either.
+        strip = strip.child(
+            el().key(format!("tab-{id}"))
+                .role("button")
+                .h(28.0)
+                .min_w(110.0)
+                .max_w(180.0)
+                .radius(8.0)
+                .center()
+                .fill(if active { panel() } else { Color::TRANSPARENT })
+                .hover_fill(hover())
+                .motion(motion::SNAPPY)
+                .on_press(move |st: &mut State| st.select_tab(id))
+                .child(
+                    row()
+                        .items_center()
+                        .gap(8.0)
+                        .px(10.0)
+                        .child(
+                            text(title)
+                                .font(type_::LABEL)
+                                .color(if active {
+                                    tok::theme(true).text
+                                } else {
+                                    muted()
+                                })
+                                .truncate(),
+                        )
+                        .child(
+                            el().key(format!("tab-close-{id}"))
+                                .role("button")
+                                .size(16.0, 16.0)
+                                .radius(8.0)
+                                .center()
+                                .hover_fill(hover())
+                                .on_press(move |st: &mut State| st.close_tab(id))
+                                .child(text("×").font(type_::LABEL).color(muted())),
+                        ),
+                ),
+        );
+    }
+
+    // "+" button to add a tab.
+    strip = strip.child(tool_button("tab-new", plus_icon(), action_new_tab));
+    strip
+}
+
 /// The narrow vertical icon rail on the far left.
 fn rail() -> El {
     col()
@@ -283,7 +369,7 @@ fn section_header(label: &'static str, key: &'static str) -> El {
 
 /// A circular space/favourite tile.
 fn round_tile(
-    glyph: &'static str,
+    glyph: impl Into<String>,
     tint: u32,
     label: &'static str,
     on_press: impl Fn(&mut State) + 'static,
@@ -320,9 +406,14 @@ fn space_tiles(s: &State) -> Vec<El> {
         .map(|(i, sp)| {
             let active = i == s.active_space;
             let idx = i;
-            round_tile(&sp.label[..1], sp.tint, sp.label, move |st: &mut State| {
-                st.active_space = idx;
-            })
+            round_tile(
+                first_char(sp.label),
+                sp.tint,
+                sp.label,
+                move |st: &mut State| {
+                    st.active_space = idx;
+                },
+            )
             .outline(2.0, 1.0, if active { accent() } else { Color::TRANSPARENT })
         })
         .collect()
@@ -361,11 +452,11 @@ fn bookmark(label: &'static str, tint: u32, url: &'static str, key: &'static str
         .hover_fill(hover())
         .on_press(move |st: &mut State| st.navigate(url))
         .child(
-            el().size(18.0, 18.0)
-                .radius(4.0)
-                .center()
-                .fill(c)
-                .child(text(&label[..1]).font(type_::LABEL).color(Color::WHITE)),
+            el().size(18.0, 18.0).radius(4.0).center().fill(c).child(
+                text(first_char(label))
+                    .font(type_::LABEL)
+                    .color(Color::WHITE),
+            ),
         )
         .child(text(label).font(type_::BODY).color(tok::theme(true).text))
 }
@@ -432,7 +523,7 @@ fn content_pane(s: &State) -> El {
         .radius(8.0)
         // `Fit` preserves the engine frame's aspect ratio, so resizing the
         // window letterboxes instead of stretching the article sideways.
-        .pixels_fit(&s.page, rune::SurfaceFit::Fit)
+        .pixels_fit(&s.tab().page, rune::SurfaceFit::Fit)
         .min_h(0.0);
 
     let mut pane = col()
@@ -445,7 +536,7 @@ fn content_pane(s: &State) -> El {
         .gap(8.0)
         .child(page);
 
-    if let Some(err) = &s.nav_error {
+    if let Some(err) = &s.tab().nav_error {
         pane = pane.child(
             text(format!("No se pudo cargar: {}", err))
                 .font(type_::LABEL)
@@ -487,6 +578,14 @@ pub fn view(s: &State, _cx: &mut Cx<State>) -> El {
             st.viewport_h = r[3];
         })
         .child(toolbar(s))
+        // A 2px accent line under the tabs shows a load in progress. It only
+        // exists while loading, so it costs nothing in the steady state.
+        .child(if s.tab().loading {
+            el().key("loading-bar").h(2.0).w_full().fill(accent())
+        } else {
+            el().key("loading-bar-idle").h(2.0).w_full()
+        })
+        .child(tab_strip(s))
         .child(
             row()
                 .key("body")
