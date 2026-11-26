@@ -342,6 +342,23 @@ fn unicode_titles_never_panic_the_view() {
 }
 
 #[test]
+fn tab_titles_are_distinct_per_site() {
+    let mut rt = rt((1280.0, 800.0));
+    // Two tabs navigated to different sites must show different titles.
+    rt.state.new_tab();
+    rt.state.navigate("https://github.com/juanpimg/Megi");
+    assert_eq!(rt.state.tab().title, "GitHub");
+    rt.state.select_tab(1);
+    rt.state.new_tab();
+    rt.state.navigate("https://www.youtube.com/watch?v=x");
+    assert_eq!(rt.state.tab().title, "YouTube");
+    assert_ne!(rt.state.tabs[1].title, rt.state.tabs[2].title);
+    // An unknown host falls back to a readable hostname, never empty.
+    rt.state.navigate("https://example.org/a/b");
+    assert_eq!(rt.state.tab().title, "example.org");
+}
+
+#[test]
 fn address_bar_follows_navigation_and_redirects() {
     // Clicking a bookmark changes the loaded URL; the visible address bar must
     // follow it, otherwise the user sees a stale address. A blocking navigation

@@ -55,7 +55,8 @@ The view recreates the reference Arc-style browser chrome:
   and a transient toast giving feedback for share/settings/menu/rail actions
   (timed on Rune's frame clock and cleared in `poll`).
   The address bar follows every navigation (and its final URL after redirects);
-  `data:` documents are shown under a friendly label instead of a raw blob.
+  `data:` documents are shown under a friendly label instead of a raw blob, and
+  each tab's title is derived from the site it visited so tabs stay distinct.
 
 Icons are vector paths (`Shape::fill_svg` / `stroke_svg`); colours are authored
 in OKLCH to match the dark, rounded reference chrome. Interactive controls use
@@ -86,8 +87,9 @@ a stale-result isolation check, loading-state lifecycle, Unicode titles, and
 timing assertions that clicks and tab switches stay non-blocking. Headless
 `Runtime` tests register the same `poll` callback the real app uses, so worker
 results are actually applied, toast show/expire lifecycle, UTF-8 tab titles,
-and address-bar synchronisation on navigate/redirect. Full suite: 20 tests in
-~2.8 s (down from ~174 s before navigation became asynchronous).
+address-bar synchronisation on navigate/redirect, and per-site tab titles.
+Full suite: 21 tests in ~2.4 s (down from ~174 s before navigation became
+asynchronous).
 
 ## Build & run
 
