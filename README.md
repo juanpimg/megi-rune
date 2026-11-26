@@ -74,9 +74,13 @@ the page's own URL; same-document (`#`), `javascript:` and `mailto:` links are
 ignored. The pointer turns into a hand while hovering a link (`on_pointer_move_local`
 + a conditional `El::cursor`), and resets on leave. A plain primary click
 navigates in place; **Cmd/Ctrl+click** (or **middle-click**) opens the link in a
-new tab via `Tx::mods().primary()`, leaving the original tab untouched. This is
-covered by unit tests plus end-to-end tests that click a rendered link, check the
-hover cursor, and verify Cmd-click opens a new tab through the real view.
+new tab via `Tx::mods().primary()`, leaving the original tab untouched.
+**Right-click** over a link opens an in-app context menu (anchored at the pointer
+via `El::absolute`) with "Abrir en nueva pestaña" and "Copiar dirección";
+Escape or picking an action dismisses it. This is covered by unit tests plus
+end-to-end tests that click a rendered link, check the hover cursor, verify
+Cmd-click opens a new tab, and drive the context-menu actions through the real
+view. A `--scene context-menu` snapshot renders it deterministically.
 
 Icons are vector paths (`Shape::fill_svg` / `stroke_svg`); colours are authored
 in OKLCH to match the dark, rounded reference chrome. Interactive controls use
@@ -110,8 +114,8 @@ results are actually applied, toast show/expire lifecycle, UTF-8 tab titles,
 address-bar synchronisation on navigate/redirect, per-site tab titles,
 the keyboard-shortcut suite, link extraction/resolution, Fit-letterbox mapping,
 an end-to-end page-link click, the hover-cursor lifecycle, and Cmd-click opening
-a new tab. Full suite: 28 tests in ~1.6 s (down from ~174 s before navigation
-became asynchronous).
+a new tab, and the link context menu + actions. Full suite: 29 tests in ~1.5 s
+(down from ~174 s before navigation became asynchronous).
 
 ## Build & run
 

@@ -336,6 +336,12 @@ pub struct State {
     /// True while the pointer hovers a clickable link, so the view can show a
     /// pointing-hand cursor over the page.
     pub hover_link: bool,
+    /// An open link context menu: the link URL and its anchor in window points.
+    /// `None` when no menu is showing.
+    pub context_menu: Option<(String, f32, f32)>,
+    /// Most recent URL copied from a link's context menu, kept in state so the
+    /// "Copiar dirección" action is observable and testable headlessly.
+    pub last_copied_url: Option<String>,
     /// A short transient message shown as a toast for action feedback (share,
     /// settings, menu, etc.), with the frame clock deadline at which it expires.
     pub toast: Option<(String, f64)>,
@@ -591,6 +597,8 @@ impl Default for State {
             viewport_h: 800.0,
             page_rect: [0.0; 4],
             hover_link: false,
+            context_menu: None,
+            last_copied_url: None,
             toast: None,
         }
     }
@@ -617,6 +625,31 @@ impl State {
         self.next_tab_id += 1;
         self.tabs.push(initial_tab(id));
         self.active_tab = self.tabs.len() - 1;
+    }
+
+    /// Opens the link context menu at the given window-point anchor.
+    pub fn open_context_menu(&mut self, url: &str, x: f32, y: f32) {
+        self.context_menu = Some((url.to_owned(), x, y));
+    }
+
+    /// Dismisses any open context menu.
+    pub fn close_context_menu(&mut self) {
+        self.context_menu = None;
+    }
+
+    /// Actions offered by the link context menu. Each closes the menu and
+    /// performs its effect on state (testable without a native clipboard).
+    pub fn context_open_in_new_tab(&mut self) {
+        if let Some((url, _, _)) = self.context_menu.take() {
+            self.new_tab_with_url(&url);
+        }
+    }
+
+    pub fn context_copy_url(&mut self, now: f64) {
+        if let Some((url, _, _)) = self.context_menu.take() {
+            self.last_copied_url = Some(url.clone());
+            self.show_toast(&format!("Enlace copiado: {url}"), now, 2.5);
+        }
     }
 
     /// Opens a brand-new tab and immediately navigates it to `url`. Used by
@@ -811,6 +844,10 @@ pub fn on_key(s: &mut State, event: &KeyEvent, tx: &mut Tx) -> bool {
         }
     }
     match &event.key {
+        Key::Escape if s.context_menu.is_some() => {
+            s.close_context_menu();
+            return true;
+        }
         Key::Left if mods.alt => {
             s.back();
             return true;

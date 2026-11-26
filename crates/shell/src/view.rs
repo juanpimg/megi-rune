@@ -561,14 +561,25 @@ fn content_pane(s: &State) -> El {
         })
         // Clicking a rendered link navigates, just like a real browser. The
         // hit-test is pure state work — no engine render on the UI thread.
+        // Right-click opens our in-app context menu anchored at the pointer.
+        .on_secondary_press_local(|st: &mut State, p: rune::PointerEvent, _tx| {
+            if let Some(url) = st.link_at_local(p.x, p.y) {
+                st.open_context_menu(&url, p.window_x, p.window_y);
+            } else {
+                st.close_context_menu();
+            }
+        })
+        // Primary click navigates in place; Cmd/Ctrl+click and middle-click
+        // open the link in a new tab.
         .on_any_press(
             |st: &mut State, btn, p: rune::PointerEvent, tx: &mut rune::Tx| {
-                // Primary click navigates in place; Cmd/Ctrl+click (like a desktop
-                // browser) and middle-click open the link in a new tab.
+                if btn == rune::PointerButton::Secondary {
+                    return; // handled by `on_secondary_press`
+                }
                 let new_tab = btn == rune::PointerButton::Middle
                     || (btn == rune::PointerButton::Primary && tx.mods().primary());
-                let secondary = btn == rune::PointerButton::Secondary;
-                if !secondary && let Some(url) = st.link_at_local(p.x, p.y) {
+                if let Some(url) = st.link_at_local(p.x, p.y) {
+                    st.close_context_menu();
                     if new_tab {
                         st.new_tab_with_url(&url);
                     } else {
@@ -614,6 +625,51 @@ fn content_pane(s: &State) -> El {
 const SIDEBAR_PANEL_MIN_W: f32 = 520.0;
 
 /// Root view.
+/// The in-app link context menu, positioned at the right-click anchor in
+/// window points. Out of flow (`absolute`) so it overlays the page without
+/// displacing any chrome. Only built while a menu is open.
+fn context_menu(s: &State) -> El {
+    let Some((_, x, y)) = &s.context_menu else {
+        return el().key("context-menu-none");
+    };
+    let menu_item = |label: &'static str, key: &'static str, action: fn(&mut State, f64)| {
+        el().key(key)
+            .role("menuitem")
+            .w(190.0)
+            .px(12.0)
+            .py(9.0)
+            .radius(6.0)
+            .hover_fill(hover())
+            .motion(motion::SNAPPY)
+            .on_press_tx(move |st: &mut State, tx: &mut rune::Tx| action(st, tx.clock()))
+            .child(text(label).font(type_::LABEL).color(Color::WHITE))
+    };
+    col()
+        .key("context-menu")
+        .role("menu")
+        .absolute(*x, *y)
+        .w(200.0)
+        .padding(5.0)
+        .radius(10.0)
+        .fill(panel())
+        .shadow(8.0, 24.0, oklcha(0.0, 0.0, 0.0, 0.45))
+        // Clicking the menu itself must not fall through to the page handler.
+        .on_any_press(|_: &mut State, _, _, _| {})
+        .child(menu_item(
+            "Abrir en nueva pestaña",
+            "ctx-new-tab",
+            action_ctx_new_tab,
+        ))
+        .child(menu_item("Copiar dirección", "ctx-copy", action_ctx_copy))
+}
+
+fn action_ctx_new_tab(s: &mut State, _now: f64) {
+    s.context_open_in_new_tab();
+}
+fn action_ctx_copy(s: &mut State, now: f64) {
+    s.context_copy_url(now);
+}
+
 pub fn view(s: &State, _cx: &mut Cx<State>) -> El {
     // An explicit sidebar toggle always wins; otherwise auto-collapse the wide
     // panel on narrow windows while keeping the icon rail for navigation.
@@ -657,4 +713,5 @@ pub fn view(s: &State, _cx: &mut Cx<State>) -> El {
                 .child(sidebar)
                 .child(content_pane(s)),
         )
+        .child(context_menu(s))
 }

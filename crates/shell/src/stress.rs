@@ -564,6 +564,57 @@ fn clicking_page_link_navigates_in_real_view() {
 }
 
 #[test]
+fn right_click_opens_context_menu_with_actions() {
+    // Right-clicking a rendered link opens an in-app context menu whose two
+    // actions (new tab / copy URL) are observable in state and testable headlessly.
+    let mut rt = rt((1280.0, 800.0));
+    rt.state.navigate_blocking(
+        "data:text/html,<a href='https://example.org/ctx' style='font-size:48px'>GO</a>",
+    );
+    rt.frame(1.0 / 60.0);
+    let link = rt.state.tab().links[0].clone();
+    let [px, py, pw, ph] = rt.state.page_rect;
+    let (sw, sh) = (rt.state.tab().page_w as f32, rt.state.tab().page_h as f32);
+    let scale = (pw / sw).min(ph / sh);
+    let cx = px + (pw - sw * scale) * 0.5 + (link.x + link.w * 0.5) * scale;
+    let cy = py + (ph - sh * scale) * 0.5 + (link.y + link.h * 0.5) * scale;
+
+    rt.secondary_down(cx, cy);
+    rt.secondary_up(cx, cy);
+    rt.frame(1.0 / 60.0);
+    assert!(
+        rt.state.context_menu.is_some(),
+        "right-click opened the menu"
+    );
+    assert!(
+        rt.find("context-menu").is_some(),
+        "menu is in the view tree"
+    );
+    assert!(rt.find("ctx-new-tab").is_some(), "new-tab item present");
+    assert!(rt.find("ctx-copy").is_some(), "copy item present");
+
+    // Escape dismisses an open menu; reopen it for the action checks.
+    rt.key(KeyEvent::from(Key::Escape));
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.context_menu.is_none(), "Escape dismissed the menu");
+    rt.secondary_down(cx, cy);
+    rt.secondary_up(cx, cy);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.context_menu.is_some(), "menu reopened");
+
+    // "Copiar dirección" stores the URL and dismisses the menu.
+    let (ix, iy) = rt.find("ctx-copy").unwrap();
+    rt.pointer_down(ix, iy);
+    rt.pointer_up(ix, iy);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(
+        rt.state.last_copied_url.as_deref(),
+        Some("https://example.org/ctx")
+    );
+    assert!(rt.state.context_menu.is_none(), "menu closed after action");
+}
+
+#[test]
 fn cmd_click_opens_link_in_new_tab() {
     use rune::{Mods, PhysicalInput};
     // Cmd/Ctrl+click on a rendered link opens a new tab instead of navigating

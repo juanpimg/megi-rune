@@ -23,9 +23,23 @@ fn inline_page(s: &mut State) {
     s.navigate_blocking("data:text/html,<h1 style='font:48px sans-serif'>Puente OK</h1>");
 }
 
+/// Deterministic scene: opens the link context menu at a fixed spot so the
+/// overlay can be snapshotted and reviewed visually.
+fn context_menu_scene(s: &mut State) {
+    s.open_context_menu(
+        "https://es.wikipedia.org/wiki/Historia_de_España",
+        320.0,
+        260.0,
+    );
+}
+
 fn main() {
     rune::run(AppSpec::<State> {
-        scenes: &[("no-sidebar", hide_sidebar), ("inline-page", inline_page)],
+        scenes: &[
+            ("no-sidebar", hide_sidebar),
+            ("inline-page", inline_page),
+            ("context-menu", context_menu_scene),
+        ],
         poll: Some(state::poll),
         on_key: Some(state::on_key),
         ..AppSpec::new(
