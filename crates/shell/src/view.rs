@@ -624,7 +624,11 @@ fn content_pane(s: &State) -> El {
 /// so the page keeps a usable share of a narrow window.
 const SIDEBAR_PANEL_MIN_W: f32 = 520.0;
 
-/// Root view.
+// The menu's drawn box, used to tell an inside click from an outside one in
+// the passive press observer below. Keep in sync with the builders underneath.
+const CONTEXT_MENU_W: f32 = 200.0;
+const CONTEXT_MENU_H: f32 = 88.0;
+
 /// The in-app link context menu, positioned at the right-click anchor in
 /// window points. Out of flow (`absolute`) so it overlays the page without
 /// displacing any chrome. Only built while a menu is open.
@@ -648,13 +652,19 @@ fn context_menu(s: &State) -> El {
         .key("context-menu")
         .role("menu")
         .absolute(*x, *y)
-        .w(200.0)
+        .w(CONTEXT_MENU_W)
         .padding(5.0)
         .radius(10.0)
         .fill(panel())
         .shadow(8.0, 24.0, oklcha(0.0, 0.0, 0.0, 0.45))
-        // Clicking the menu itself must not fall through to the page handler.
-        .on_any_press(|_: &mut State, _, _, _| {})
+        // `on_any_press` is a passive window-wide observer: `p.x/y` are local
+        // to this menu, so a press outside its box dismisses it. Clicks inside
+        // are left to the items' own handlers.
+        .on_any_press(|st: &mut State, _btn, p: rune::PointerEvent, _tx| {
+            if p.x < 0.0 || p.y < 0.0 || p.x > CONTEXT_MENU_W || p.y > CONTEXT_MENU_H {
+                st.close_context_menu();
+            }
+        })
         .child(menu_item(
             "Abrir en nueva pestaña",
             "ctx-new-tab",

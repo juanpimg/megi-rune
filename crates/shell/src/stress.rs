@@ -615,6 +615,41 @@ fn right_click_opens_context_menu_with_actions() {
 }
 
 #[test]
+fn clicking_outside_dismisses_context_menu() {
+    // A passive on_any_press observer on the menu closes it when a click lands
+    // outside its box, mirroring native browser behaviour.
+    let mut rt = rt((1280.0, 800.0));
+    rt.state.navigate_blocking(
+        "data:text/html,<a href='https://example.org/out' style='font-size:48px'>GO</a>",
+    );
+    rt.frame(1.0 / 60.0);
+    let link = rt.state.tab().links[0].clone();
+    let [px, py, pw, ph] = rt.state.page_rect;
+    let (sw, sh) = (rt.state.tab().page_w as f32, rt.state.tab().page_h as f32);
+    let scale = (pw / sw).min(ph / sh);
+    let cx = px + (pw - sw * scale) * 0.5 + (link.x + link.w * 0.5) * scale;
+    let cy = py + (ph - sh * scale) * 0.5 + (link.y + link.h * 0.5) * scale;
+
+    rt.secondary_down(cx, cy);
+    rt.secondary_up(cx, cy);
+    rt.frame(1.0 / 60.0);
+    assert!(
+        rt.state.context_menu.is_some(),
+        "menu open before outside click"
+    );
+
+    // Click far from the menu's anchor (which sits at cx,cy with a 200x88 box).
+    let (ox, oy) = (cx + 400.0, cy + 300.0);
+    rt.pointer_down(ox, oy);
+    rt.pointer_up(ox, oy);
+    rt.frame(1.0 / 60.0);
+    assert!(
+        rt.state.context_menu.is_none(),
+        "outside click dismissed the menu"
+    );
+}
+
+#[test]
 fn cmd_click_opens_link_in_new_tab() {
     use rune::{Mods, PhysicalInput};
     // Cmd/Ctrl+click on a rendered link opens a new tab instead of navigating
