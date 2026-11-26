@@ -245,6 +245,23 @@ fn start_url() -> String {
     )
 }
 
+/// Turns an internal navigation URL into the short, human-friendly form shown
+/// in the address bar. The start page's base64 `data:` blob would otherwise
+/// flood the field; real `http(s)://` URLs are shown as-is (the lock icon in
+/// the view conveys the scheme).
+fn display_url(url: &str) -> String {
+    if url.starts_with("data:text/html;base64,") {
+        // The built-in start page: show the site it emulates, not its blob.
+        "https://es.wikipedia.org".to_owned()
+    } else if url.starts_with("data:") {
+        // Any other inline document stays local; label it instead of flooding
+        // the field with markup.
+        "página local".to_owned()
+    } else {
+        url.to_owned()
+    }
+}
+
 /// Renders the built-in start page exactly once (lazily) and caches its raw
 /// RGBA bytes. New tabs copy these bytes into their own `Pixels` handle, so
 /// opening a tab is instant and never creates a `WebView` on the UI thread.
@@ -433,6 +450,7 @@ impl State {
         // Reflect the intent immediately in the URL bar and clear stale errors.
         tab.nav_error = None;
         tab.loaded_url = target.clone();
+        tab.url_edit.replace_text(display_url(&target));
         tab.loading = true;
         let id = tab.id;
         self.nav.request(id, &target);
@@ -483,7 +501,13 @@ impl State {
                     tab.page.set(result.width, result.height, rgba);
                 }
                 if let Some(url) = result.url {
-                    tab.loaded_url = url;
+                    tab.loaded_url = url.clone();
+                    // Keep the address bar in sync with the final URL (after
+                    // redirects), but don't clobber what the user is typing if
+                    // they started a new navigation while this one rendered.
+                    if tab.loading {
+                        tab.url_edit.replace_text(display_url(&url));
+                    }
                 }
                 tab.nav_error = None;
             }
@@ -505,6 +529,7 @@ impl State {
                 let tab = self.tab_mut();
                 update_pixels(&tab.page, frame);
                 tab.loaded_url = frame.url.clone();
+                tab.url_edit.replace_text(display_url(&frame.url));
                 tab.nav_error = None;
             }
             Err(e) => {

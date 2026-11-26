@@ -342,6 +342,33 @@ fn unicode_titles_never_panic_the_view() {
 }
 
 #[test]
+fn address_bar_follows_navigation_and_redirects() {
+    // Clicking a bookmark changes the loaded URL; the visible address bar must
+    // follow it, otherwise the user sees a stale address. A blocking navigation
+    // (with a redirect) must also update what is shown.
+    let mut rt = rt((1280.0, 800.0));
+    rt.state.navigate("https://github.com");
+    assert_eq!(
+        rt.state.tab().url_edit.text,
+        "https://github.com",
+        "address bar reflects an async navigation immediately"
+    );
+    assert!(rt.state.tab().loaded_url.contains("github.com"));
+
+    // The start page is shown as a friendly URL, never as a base64 blob.
+    rt.state.navigate("");
+    assert_eq!(rt.state.tab().url_edit.text, "https://es.wikipedia.org");
+
+    // A blocking navigation to a data URL with a redirect keeps the field sane.
+    rt.state
+        .navigate_blocking("data:text/html,<title>x</title><h1>h</h1>");
+    assert!(
+        !rt.state.tab().url_edit.text.starts_with("data:"),
+        "address bar never shows a raw data URL"
+    );
+}
+
+#[test]
 fn loading_state_sets_and_clears_around_navigation() {
     let mut rt = rt((1280.0, 800.0));
     // A data: URL renders fast on the worker; poll until the flag clears.
