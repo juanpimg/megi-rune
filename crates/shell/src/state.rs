@@ -19,6 +19,12 @@ use rune::{Key, KeyEvent, TextEdit, Tx};
 
 use crate::bridge::{frame_to_pixels, update_pixels};
 
+/// Context-menu dimensions in points, shared by the clamping logic here and
+/// the view builder (and the outside-click hit box). Keep them in sync.
+pub const CONTEXT_MENU_W: f32 = 200.0;
+pub const CONTEXT_MENU_H: f32 = 88.0;
+const EDGE_GAP: f32 = 8.0;
+
 /// Width/height of the engine viewport. Content is later scaled into the
 /// shell's centre pane by Rune.
 pub const PAGE_W: u32 = 1120;
@@ -644,9 +650,15 @@ impl State {
         self.active_tab = self.tabs.len() - 1;
     }
 
-    /// Opens the link context menu at the given window-point anchor.
+    /// Opens the link context menu at the given window-point anchor, clamped
+    /// so the whole menu stays inside the viewport even near the right/bottom
+    /// edges. Uses the same dimensions as the view's menu builder.
     pub fn open_context_menu(&mut self, url: &str, x: f32, y: f32) {
-        self.context_menu = Some((url.to_owned(), x, y));
+        let max_x = (self.viewport_w - CONTEXT_MENU_W - EDGE_GAP).max(0.0);
+        let max_y = (self.viewport_h - CONTEXT_MENU_H - EDGE_GAP).max(0.0);
+        let ax = x.clamp(0.0, max_x);
+        let ay = y.clamp(0.0, max_y);
+        self.context_menu = Some((url.to_owned(), ax, ay));
     }
 
     /// Dismisses any open context menu.

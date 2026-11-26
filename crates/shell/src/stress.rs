@@ -615,6 +615,31 @@ fn right_click_opens_context_menu_with_actions() {
 }
 
 #[test]
+fn context_menu_clamps_to_viewport_edges() {
+    use crate::state::{CONTEXT_MENU_H, CONTEXT_MENU_W};
+    let mut rt = rt((1280.0, 800.0));
+    // Anchor far past the bottom-right corner: the menu must be pulled back so
+    // its full box remains on screen.
+    rt.state
+        .open_context_menu("https://example.org/edge", 5000.0, 5000.0);
+    let (_, x, y) = rt.state.context_menu.clone().unwrap();
+    assert!(
+        x >= 0.0 && x + CONTEXT_MENU_W <= rt.state.viewport_w,
+        "x clamped"
+    );
+    assert!(
+        y >= 0.0 && y + CONTEXT_MENU_H <= rt.state.viewport_h,
+        "y clamped"
+    );
+
+    // Anchor past the top-left: clamp to zero, never negative.
+    rt.state
+        .open_context_menu("https://example.org/edge", -50.0, -50.0);
+    let (_, x, y) = rt.state.context_menu.clone().unwrap();
+    assert_eq!((x, y), (0.0, 0.0), "clamped to top-left");
+}
+
+#[test]
 fn clicking_outside_dismisses_context_menu() {
     // A passive on_any_press observer on the menu closes it when a click lands
     // outside its box, mirroring native browser behaviour.

@@ -4,7 +4,7 @@
 use rune::tok::{self, motion, type_};
 use rune::{Color, Cx, El, Key, Shape, col, el, oklch, oklcha, row, text, text_input};
 
-use crate::state::State;
+use crate::state::{CONTEXT_MENU_H, CONTEXT_MENU_W, State};
 
 // Palette authored in OKLCH to match the dark, rounded reference chrome.
 fn chrome() -> Color {
@@ -625,11 +625,6 @@ fn content_pane(s: &State) -> El {
 /// Below this width the wide sidebar panel gives way to the icon rail only,
 /// so the page keeps a usable share of a narrow window.
 const SIDEBAR_PANEL_MIN_W: f32 = 520.0;
-
-// The menu's drawn box, used to tell an inside click from an outside one in
-// the passive press observer below. Keep in sync with the builders underneath.
-const CONTEXT_MENU_W: f32 = 200.0;
-const CONTEXT_MENU_H: f32 = 88.0;
 
 /// The in-app link context menu, positioned at the right-click anchor in
 /// window points. Out of flow (`absolute`) so it overlays the page without
