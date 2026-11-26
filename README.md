@@ -71,8 +71,10 @@ the page is mapped back through the `pixels_fit(Fit)` letterbox into CSS
 coordinates (topmost region wins) and navigates the active tab — entirely in
 state, with no engine work on the UI thread. Relative URLs are resolved against
 the page's own URL; same-document (`#`), `javascript:` and `mailto:` links are
-ignored. This is covered by unit tests plus an end-to-end test that clicks a
-rendered link through the real view.
+ignored. The pointer turns into a hand while hovering a link (`on_pointer_move_local`
++ a conditional `El::cursor`), and resets on leave. This is covered by unit
+tests plus end-to-end tests that click a rendered link and check the hover cursor
+through the real view.
 
 Icons are vector paths (`Shape::fill_svg` / `stroke_svg`); colours are authored
 in OKLCH to match the dark, rounded reference chrome. Interactive controls use
@@ -105,8 +107,8 @@ timing assertions that clicks and tab switches stay non-blocking. Headless
 results are actually applied, toast show/expire lifecycle, UTF-8 tab titles,
 address-bar synchronisation on navigate/redirect, per-site tab titles,
 the keyboard-shortcut suite, link extraction/resolution, Fit-letterbox mapping,
-and an end-to-end page-link click. Full suite: 26 tests in ~1.5 s (down from
-~174 s before navigation became asynchronous).
+an end-to-end page-link click, and the hover-cursor lifecycle. Full suite:
+27 tests in ~1.4 s (down from ~174 s before navigation became asynchronous).
 
 ## Build & run
 

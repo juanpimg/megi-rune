@@ -333,6 +333,9 @@ pub struct State {
     /// `on_layout`), used to map a click back into the frame's CSS coordinates
     /// (replicating Rune's `pixels_fit(Fit)` letterbox).
     pub page_rect: [f32; 4],
+    /// True while the pointer hovers a clickable link, so the view can show a
+    /// pointing-hand cursor over the page.
+    pub hover_link: bool,
     /// A short transient message shown as a toast for action feedback (share,
     /// settings, menu, etc.), with the frame clock deadline at which it expires.
     pub toast: Option<(String, f64)>,
@@ -587,6 +590,7 @@ impl Default for State {
             viewport_w: 1280.0,
             viewport_h: 800.0,
             page_rect: [0.0; 4],
+            hover_link: false,
             toast: None,
         }
     }

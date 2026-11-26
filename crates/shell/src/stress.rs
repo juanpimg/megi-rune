@@ -564,6 +564,35 @@ fn clicking_page_link_navigates_in_real_view() {
 }
 
 #[test]
+fn hovering_a_link_shows_pointer_cursor() {
+    use rune::Cursor;
+    // Hovering a rendered link must flip the page to a pointing-hand cursor,
+    // and leaving it must restore the default cursor.
+    let mut rt = rt((1280.0, 800.0));
+    rt.state.navigate_blocking(
+        "data:text/html,<a href='https://example.org/go' style='font-size:48px'>GO</a>",
+    );
+    rt.frame(1.0 / 60.0);
+    let link = rt.state.tab().links[0].clone();
+    let [px, py, pw, ph] = rt.state.page_rect;
+    let (sw, sh) = (rt.state.tab().page_w as f32, rt.state.tab().page_h as f32);
+    let scale = (pw / sw).min(ph / sh);
+    let in_x = px + (pw - sw * scale) * 0.5 + (link.x + link.w * 0.5) * scale;
+    let in_y = py + (ph - sh * scale) * 0.5 + (link.y + link.h * 0.5) * scale;
+
+    rt.pointer_move(in_x, in_y);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.hover_link, "hover state set over a link");
+    assert_eq!(rt.cursor(), Cursor::Pointer, "hand cursor over a link");
+
+    // Move the pointer far outside the page (to the toolbar) and settle.
+    rt.pointer_move(2.0, 2.0);
+    rt.frame(1.0 / 60.0);
+    assert!(!rt.state.hover_link, "hover state cleared off a link");
+    assert_eq!(rt.cursor(), Cursor::Default, "default cursor off a link");
+}
+
+#[test]
 fn loading_state_sets_and_clears_around_navigation() {
     let mut rt = rt((1280.0, 800.0));
     // A data: URL renders fast on the worker; poll until the flag clears.

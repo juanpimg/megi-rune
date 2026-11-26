@@ -540,10 +540,25 @@ fn content_pane(s: &State) -> El {
         // `Fit` preserves the engine frame's aspect ratio, so resizing the
         // window letterboxes instead of stretching the article sideways.
         .pixels_fit(&s.tab().page, rune::SurfaceFit::Fit)
+        // Pointing-hand cursor while hovering a rendered link.
+        .cursor(if s.hover_link {
+            rune::Cursor::Pointer
+        } else {
+            rune::Cursor::Default
+        })
         .min_h(0.0)
         // Record where the page is laid out so a click can be mapped back into
         // CSS pixels (the Fit letterbox is computed in `State::link_at_local`).
         .on_layout(|st: &mut State, r: [f32; 4]| st.page_rect = r)
+        // Track hover over links so the pointer becomes a hand, like a browser.
+        .on_pointer_move_local(|st: &mut State, p: rune::PointerEvent, _tx| {
+            st.hover_link = st.link_at_local(p.x, p.y).is_some();
+        })
+        .on_hover_change(|st: &mut State, inside: bool, _tx| {
+            if !inside {
+                st.hover_link = false;
+            }
+        })
         // Clicking a rendered link navigates, just like a real browser. The
         // hit-test is pure state work — no engine render on the UI thread.
         .on_any_press(|st: &mut State, btn, p: rune::PointerEvent, _tx| {
