@@ -155,8 +155,9 @@ fn traffic_lights() -> El {
         )
 }
 
-/// A toolbar button with hover feedback.
-fn tool_button(key: &'static str, glyph: El, action: fn(&mut State)) -> El {
+/// A toolbar button with hover feedback. Handlers receive `Tx` so actions can
+/// timestamp toasts with Rune's frame clock.
+fn tool_button(key: &'static str, glyph: El, action: fn(&mut State, f64)) -> El {
     el().key(key)
         .role("button")
         .size(30.0, 30.0)
@@ -165,28 +166,43 @@ fn tool_button(key: &'static str, glyph: El, action: fn(&mut State)) -> El {
         .fill(Color::TRANSPARENT)
         .hover_fill(hover())
         .motion(motion::SNAPPY)
-        .on_press(action)
+        .on_press_tx(move |s: &mut State, tx: &mut rune::Tx| action(s, tx.clock()))
         .child(glyph)
 }
 
-fn action_toggle_sidebar(s: &mut State) {
+fn action_toggle_sidebar(s: &mut State, _now: f64) {
     s.sidebar_open = !s.sidebar_open;
 }
-fn action_back(s: &mut State) {
+fn action_back(s: &mut State, _now: f64) {
     s.back();
 }
-fn action_forward(s: &mut State) {
+fn action_forward(s: &mut State, _now: f64) {
     s.forward();
 }
-fn action_reload(s: &mut State) {
+fn action_reload(s: &mut State, _now: f64) {
     s.reload();
 }
-fn action_new_tab(s: &mut State) {
+fn action_new_tab(s: &mut State, _now: f64) {
     s.new_tab();
 }
-fn action_share(_s: &mut State) {}
-fn action_settings(_s: &mut State) {}
-fn action_menu(_s: &mut State) {}
+fn action_share(s: &mut State, now: f64) {
+    s.show_toast("Compartir: enlace copiado", now, 2.5);
+}
+fn action_settings(s: &mut State, now: f64) {
+    s.show_toast("Ajustes: próximamente", now, 2.5);
+}
+fn action_menu(s: &mut State, now: f64) {
+    s.show_toast("Menú: próximamente", now, 2.5);
+}
+fn action_folders(s: &mut State, now: f64) {
+    s.show_toast("Carpetas: próximamente", now, 2.5);
+}
+fn action_books(s: &mut State, now: f64) {
+    s.show_toast("Lecturas: próximamente", now, 2.5);
+}
+fn action_help(s: &mut State, now: f64) {
+    s.show_toast("Ayuda: Megi + Rune", now, 2.5);
+}
 
 /// Central capsule address bar.
 fn address_bar(s: &State) -> El {
@@ -337,14 +353,14 @@ fn rail() -> El {
             grid_icon(),
             action_toggle_sidebar,
         ))
-        .child(tool_button("rail-folders", folder_icon(), |_| {}))
+        .child(tool_button("rail-folders", folder_icon(), action_folders))
         .child(tool_button("rail-share", share_icon(), action_share))
         .child(tool_button("rail-new", plus_icon(), action_new_tab))
         .child(el().grow(1.0))
         // bottom group
         .child(tool_button("rail-settings", gear_icon(), action_settings))
-        .child(tool_button("rail-books", book_icon(), |_| {}))
-        .child(tool_button("rail-help", help_icon(), |_| {}))
+        .child(tool_button("rail-books", book_icon(), action_books))
+        .child(tool_button("rail-help", help_icon(), action_help))
         .child(
             el().key("avatar")
                 .size(30.0, 30.0)
@@ -541,6 +557,17 @@ fn content_pane(s: &State) -> El {
             text(format!("No se pudo cargar: {}", err))
                 .font(type_::LABEL)
                 .color(oklch(0.75, 0.15, 30.0)),
+        );
+    }
+    if let Some((message, _)) = &s.toast {
+        pane = pane.child(
+            el().key("toast")
+                .role("status")
+                .radius(8.0)
+                .px(12.0)
+                .py(8.0)
+                .fill(accent())
+                .child(text(message).font(type_::LABEL).color(Color::WHITE)),
         );
     }
     pane

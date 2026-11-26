@@ -308,6 +308,26 @@ fn tab_switch_is_non_blocking_and_preserves_each_tabs_url() {
 }
 
 #[test]
+fn action_buttons_show_and_expire_toasts() {
+    let mut rt = rt((1280.0, 800.0));
+    // Every formerly-dead action must now produce visible feedback.
+    for key in ["settings", "share", "menu"] {
+        if let Some((x, y)) = rt.find(key) {
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+        }
+        rt.frame(1.0 / 60.0);
+        assert!(rt.state.toast.is_some(), "{key} produced a toast");
+        assert!(rt.find("toast").is_some(), "{key} toast is in the tree");
+    }
+    // Advance the frame clock past the toast deadline; poll must clear it.
+    for _ in 0..400 {
+        rt.frame(1.0 / 60.0);
+    }
+    assert!(rt.state.toast.is_none(), "toast expires on the frame clock");
+}
+
+#[test]
 fn unicode_titles_never_panic_the_view() {
     // A tab title with multi-byte characters used to be sliced at byte 19,
     // which can land inside a UTF-8 sequence and panic. Build such a title and

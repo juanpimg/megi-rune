@@ -51,7 +51,9 @@ The view recreates the reference Arc-style browser chrome:
   settings, books, help, avatar at the bottom;
 - left panel: **Espacios** and **Favoritos** grids plus a bookmark list, all
   driven by state and scrollable;
-- centre pane: the Megi-rendered page, with an error line when navigation fails.
+- centre pane: the Megi-rendered page, with an error line when navigation fails
+  and a transient toast giving feedback for share/settings/menu/rail actions
+  (timed on Rune's frame clock and cleared in `poll`).
 
 Icons are vector paths (`Shape::fill_svg` / `stroke_svg`); colours are authored
 in OKLCH to match the dark, rounded reference chrome. Interactive controls use
@@ -81,8 +83,9 @@ navigation, wheel scrolling, garbage URL input, tab create/switch/close hammerin
 a stale-result isolation check, loading-state lifecycle, Unicode titles, and
 timing assertions that clicks and tab switches stay non-blocking. Headless
 `Runtime` tests register the same `poll` callback the real app uses, so worker
-results are actually applied. Full suite: 18 tests in ~2 s (down from ~174 s
-before navigation became asynchronous).
+results are actually applied, toast show/expire lifecycle, and UTF-8 tab titles.
+Full suite: 19 tests in ~2.5 s (down from ~174 s before navigation became
+asynchronous).
 
 ## Build & run
 

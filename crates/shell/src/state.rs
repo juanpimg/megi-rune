@@ -209,6 +209,26 @@ pub struct State {
     /// wide sidebar on narrow windows).
     pub viewport_w: f32,
     pub viewport_h: f32,
+    /// A short transient message shown as a toast for action feedback (share,
+    /// settings, menu, etc.), with the frame clock deadline at which it expires.
+    pub toast: Option<(String, f64)>,
+}
+
+impl State {
+    /// Shows a toast until `now + seconds`. `now` comes from `Tx::clock()` in
+    /// view handlers, so toasts expire on Rune's frame clock, not wall time.
+    pub fn show_toast(&mut self, message: &str, now: f64, seconds: f64) {
+        self.toast = Some((message.to_owned(), now + seconds));
+    }
+
+    /// Clears an expired toast. Called from `poll` every frame.
+    pub fn expire_toast(&mut self, now: f64) -> bool {
+        if self.toast.as_ref().is_some_and(|(_, until)| now >= *until) {
+            self.toast = None;
+            return true;
+        }
+        false
+    }
 }
 
 /// HTML shown before any real page is loaded. Styled to look like the
@@ -349,6 +369,7 @@ impl Default for State {
             results: res_rx,
             viewport_w: 1280.0,
             viewport_h: 800.0,
+            toast: None,
         }
     }
 }
@@ -493,7 +514,9 @@ impl State {
     }
 }
 
-/// Rune `poll` callback: drains worker results every frame.
-pub fn poll(s: &mut State, _clock: f64, _tx: &mut Tx) -> bool {
-    s.poll_navigation()
+/// Rune `poll` callback: drains worker results and expires toasts every frame.
+pub fn poll(s: &mut State, clock: f64, _tx: &mut Tx) -> bool {
+    let mut changed = s.poll_navigation();
+    changed |= s.expire_toast(clock);
+    changed
 }
