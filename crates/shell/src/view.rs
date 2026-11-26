@@ -552,7 +552,9 @@ fn content_pane(s: &State) -> El {
         .on_layout(|st: &mut State, r: [f32; 4]| st.page_rect = r)
         // Track hover over links so the pointer becomes a hand, like a browser.
         .on_pointer_move_local(|st: &mut State, p: rune::PointerEvent, _tx| {
-            st.hover_link = st.link_at_local(p.x, p.y).is_some();
+            // Allocation-free hit test: pointer moves happen at high frequency,
+            // so avoid resolving the href into a String just to decide a cursor.
+            st.hover_link = st.link_hit_local(p.x, p.y);
         })
         .on_hover_change(|st: &mut State, inside: bool, _tx| {
             if !inside {

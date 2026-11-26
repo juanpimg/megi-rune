@@ -717,6 +717,42 @@ fn hovering_a_link_shows_pointer_cursor() {
 }
 
 #[test]
+fn cheap_link_hit_agrees_with_url_resolving_hit() {
+    // The hover path uses the allocation-free link_hit_local on every pointer
+    // move. It must agree exactly with link_at_local (used on click), so the
+    // cursor never disagrees with what a click would actually navigate to.
+    let mut rt = rt((1280.0, 800.0));
+    rt.state.navigate_blocking(
+        "data:text/html,<a href='https://example.org/a' style='font-size:48px'>A</a> \
+         <a href='/rel' style='font-size:48px'>B</a>",
+    );
+    rt.frame(1.0 / 60.0);
+    let links = rt.state.tab().links.clone();
+    assert!(links.len() >= 2, "links extracted from both anchors");
+    let [px, py, pw, ph] = rt.state.page_rect;
+    let (sw, sh) = (rt.state.tab().page_w as f32, rt.state.tab().page_h as f32);
+    let scale = (pw / sw).min(ph / sh);
+    for link in &links {
+        let local_x = (px + (pw - sw * scale) * 0.5 + (link.x + link.w * 0.5) * scale) - px;
+        let local_y = (py + (ph - sh * scale) * 0.5 + (link.y + link.h * 0.5) * scale) - py;
+        assert!(
+            rt.state.link_hit_local(local_x, local_y),
+            "cheap hit must see link {}",
+            link.href
+        );
+        assert!(
+            rt.state.link_at_local(local_x, local_y).is_some(),
+            "url hit must see link {}",
+            link.href
+        );
+    }
+    // A point in the letterbox (top-left corner outside the drawn frame) hits
+    // nothing in both paths.
+    assert!(!rt.state.link_hit_local(1.0, 1.0));
+    assert!(rt.state.link_at_local(1.0, 1.0).is_none());
+}
+
+#[test]
 fn loading_state_sets_and_clears_around_navigation() {
     let mut rt = rt((1280.0, 800.0));
     // A data: URL renders fast on the worker; poll until the flag clears.

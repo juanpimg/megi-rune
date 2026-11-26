@@ -114,9 +114,10 @@ results are actually applied, toast show/expire lifecycle, UTF-8 tab titles,
 address-bar synchronisation on navigate/redirect, per-site tab titles,
 the keyboard-shortcut suite, link extraction/resolution, Fit-letterbox mapping,
 an end-to-end page-link click, the hover-cursor lifecycle, and Cmd-click opening
-a new tab, the link context menu + actions, and dismiss-on-outside-click.
-Full suite: 30 tests in ~1.6 s (down from ~174 s before navigation became
-asynchronous).
+a new tab, the link context menu + actions, dismiss-on-outside-click, and
+hover/click hit-test agreement. The pointer-move hover path is allocation-free
+(`link_hit_local` booleans; href resolution only happens on click). Full suite:
+31 tests in ~1.9 s (down from ~174 s before navigation became asynchronous).
 
 ## Build & run
 

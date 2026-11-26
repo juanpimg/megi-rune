@@ -367,25 +367,42 @@ impl State {
     /// points) into the frame's CSS-pixel coordinates, matching Rune's
     /// `pixels_fit(..., Fit)` placement (centred, aspect-preserving, letterboxed).
     /// Returns the resolved URL of the topmost link under the point, if any.
-    pub fn link_at_local(&self, local_x: f32, local_y: f32) -> Option<String> {
+    /// Maps a point local to the page element into the frame's CSS coordinates,
+    /// replicating `pixels_fit(Fit)`'s centred letterbox. Returns `None` before
+    /// layout or when the frame has no size.
+    fn css_point(&self, local_x: f32, local_y: f32) -> Option<(f32, f32)> {
         let tab = self.tab();
         let [_, _, nw, nh] = self.page_rect;
         let (sw, sh) = (tab.page_w as f32, tab.page_h as f32);
         if sw <= 0.0 || sh <= 0.0 || nw <= 0.0 || nh <= 0.0 {
             return None;
         }
-        // Replicate image_rect(source, Fit, CENTRED): scale = min(nw/sw, nh/sh),
-        // centred on both axes (share 0.5). `local_x/y` are already relative to
-        // the element's own top-left, so we must NOT add the element's window
-        // position (nx, ny) here — that would offset every click by the toolbar
-        // and sidebar width in the real app.
+        // `local_x/y` are already relative to the element's own top-left, so we
+        // must NOT add the element's window position (nx, ny) here — that would
+        // offset every click by the toolbar and sidebar width.
         let scale = (nw / sw).min(nh / sh);
-        let drawn_w = sw * scale;
-        let drawn_h = sh * scale;
-        let origin_x = (nw - drawn_w) * 0.5;
-        let origin_y = (nh - drawn_h) * 0.5;
-        let css_x = (local_x - origin_x) / scale;
-        let css_y = (local_y - origin_y) / scale;
+        let origin_x = (nw - sw * scale) * 0.5;
+        let origin_y = (nh - sh * scale) * 0.5;
+        Some(((local_x - origin_x) / scale, (local_y - origin_y) / scale))
+    }
+
+    /// Cheap hit test used on every pointer move: no URL resolution, no String
+    /// allocation. Links are painted in order, so the last containing region
+    /// wins, matching Megi's topmost-paint hit semantics.
+    pub fn link_hit_local(&self, local_x: f32, local_y: f32) -> bool {
+        let Some((css_x, css_y)) = self.css_point(local_x, local_y) else {
+            return false;
+        };
+        self.tab()
+            .links
+            .iter()
+            .rev()
+            .any(|l| css_x >= l.x && css_x < l.x + l.w && css_y >= l.y && css_y < l.y + l.h)
+    }
+
+    pub fn link_at_local(&self, local_x: f32, local_y: f32) -> Option<String> {
+        let (css_x, css_y) = self.css_point(local_x, local_y)?;
+        let tab = self.tab();
         // Links are painted in order; the last containing region wins, matching
         // Megi's own hit_test semantics (topmost paint = topmost link).
         tab.links
