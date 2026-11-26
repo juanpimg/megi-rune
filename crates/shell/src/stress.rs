@@ -6,7 +6,7 @@
 //! real embedded Megi `WebView`), so a panic or a broken layout surfaces here
 //! instead of in front of the user.
 
-use rune::{Env, Key, KeyEvent, Runtime};
+use rune::{Env, Key, KeyEvent, Mods, Runtime};
 
 use crate::state::State;
 use crate::view::view;
@@ -16,6 +16,7 @@ fn rt(size: (f32, f32)) -> Runtime<State> {
     // `rune::run` wires AppSpec::poll automatically; a bare headless Runtime
     // does not, so register the same callback to mirror the real app exactly.
     runtime.poll = Some(crate::state::poll);
+    runtime.on_key = Some(crate::state::on_key);
     runtime.frame(0.0);
     runtime
 }
@@ -338,6 +339,78 @@ fn unicode_titles_never_panic_the_view() {
     assert!(
         rt.find("page").is_some(),
         "view survives a Unicode tab title"
+    );
+}
+
+fn chord(c: char) -> KeyEvent {
+    KeyEvent {
+        key: Key::Command(c),
+        mods: Mods {
+            cmd: true,
+            ..Mods::default()
+        },
+    }
+}
+
+#[test]
+fn keyboard_shortcuts_control_tabs_navigation_and_focus() {
+    let mut rt = rt((1280.0, 800.0));
+    let initial = rt.state.tabs.len();
+
+    // Rune queues keys and dispatches them during frame(), so pump a frame
+    // after each chord before asserting.
+    let press = |rt: &mut Runtime<State>, ev: KeyEvent| {
+        rt.key(ev);
+        rt.frame(1.0 / 60.0);
+    };
+
+    // Cmd/Ctrl+T opens a tab; Cmd/Ctrl+W closes it again.
+    press(&mut rt, chord('t'));
+    assert_eq!(rt.state.tabs.len(), initial + 1, "ctrl+t opens a tab");
+    press(&mut rt, chord('w'));
+    assert_eq!(rt.state.tabs.len(), initial, "ctrl+w closes a tab");
+
+    // Closing never drops the last tab, even if ctrl+w is spammed.
+    for _ in 0..8 {
+        press(&mut rt, chord('w'));
+    }
+    assert_eq!(rt.state.tabs.len(), 1, "ctrl+w keeps at least one tab");
+
+    // Cmd/Ctrl+L focuses the address bar without panicking.
+    press(&mut rt, chord('l'));
+
+    // Alt+Left / Alt+Right and F5 / Ctrl+R trigger navigation without blocking.
+    for ev in [
+        KeyEvent {
+            key: Key::Left,
+            mods: Mods {
+                alt: true,
+                ..Mods::default()
+            },
+        },
+        KeyEvent {
+            key: Key::Right,
+            mods: Mods {
+                alt: true,
+                ..Mods::default()
+            },
+        },
+        KeyEvent {
+            key: Key::Function(5),
+            mods: Mods::default(),
+        },
+        chord('r'),
+    ] {
+        let start = std::time::Instant::now();
+        press(&mut rt, ev);
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(200),
+            "shortcut navigation must stay non-blocking"
+        );
+    }
+    assert!(
+        rt.find("page").is_some(),
+        "view survives keyboard shortcuts"
     );
 }
 

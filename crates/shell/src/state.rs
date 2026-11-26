@@ -15,7 +15,7 @@ use std::thread;
 
 use megi_webview::net::base64_encode;
 use megi_webview::{WebView, WebViewOptions};
-use rune::{TextEdit, Tx};
+use rune::{Key, KeyEvent, TextEdit, Tx};
 
 use crate::bridge::{frame_to_pixels, update_pixels};
 
@@ -588,4 +588,58 @@ pub fn poll(s: &mut State, clock: f64, _tx: &mut Tx) -> bool {
     let mut changed = s.poll_navigation();
     changed |= s.expire_toast(clock);
     changed
+}
+
+/// Browser-style keyboard shortcuts, handled at the app level for keys the
+/// focused control did not consume. Returns true when a shortcut was handled.
+///
+/// - `Cmd/Ctrl+T` — new tab
+/// - `Cmd/Ctrl+W` — close the active tab
+/// - `Alt+←` / `Alt+→` — back / forward
+/// - `Cmd/Ctrl+L` — focus the address bar (selecting its text)
+/// - `F5` / `Cmd/Ctrl+R` — reload
+pub fn on_key(s: &mut State, event: &KeyEvent, tx: &mut Tx) -> bool {
+    let mods = event.mods;
+    // `Key::Command(c)` is Cmd+c on macOS and Ctrl+c elsewhere; `mods.primary()`
+    // is true for both, so a single check covers both platforms.
+    if let Key::Command(c) = &event.key
+        && mods.primary()
+    {
+        match c.to_ascii_lowercase() {
+            't' => {
+                s.new_tab();
+                return true;
+            }
+            'w' => {
+                let id = s.tab().id;
+                s.close_tab(id);
+                return true;
+            }
+            'l' => {
+                tx.focus("url-input", true);
+                return true;
+            }
+            'r' => {
+                s.reload();
+                return true;
+            }
+            _ => {}
+        }
+    }
+    match &event.key {
+        Key::Left if mods.alt => {
+            s.back();
+            return true;
+        }
+        Key::Right if mods.alt => {
+            s.forward();
+            return true;
+        }
+        Key::Function(5) => {
+            s.reload();
+            return true;
+        }
+        _ => {}
+    }
+    false
 }

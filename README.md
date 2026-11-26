@@ -58,6 +58,11 @@ The view recreates the reference Arc-style browser chrome:
   `data:` documents are shown under a friendly label instead of a raw blob, and
   each tab's title is derived from the site it visited so tabs stay distinct.
 
+Browser-style keyboard shortcuts work app-wide: `Cmd/Ctrl+T` new tab,
+`Cmd/Ctrl+W` close tab, `Cmd/Ctrl+L` focus the address bar, `Alt+←/→`
+back/forward, and `F5`/`Cmd/Ctrl+R` reload.Navigation stays non-blocking on
+every shortcut.
+
 Icons are vector paths (`Shape::fill_svg` / `stroke_svg`); colours are authored
 in OKLCH to match the dark, rounded reference chrome. Interactive controls use
 `.hover_fill()` and Rune's `motion::SNAPPY` spring.
@@ -87,9 +92,9 @@ a stale-result isolation check, loading-state lifecycle, Unicode titles, and
 timing assertions that clicks and tab switches stay non-blocking. Headless
 `Runtime` tests register the same `poll` callback the real app uses, so worker
 results are actually applied, toast show/expire lifecycle, UTF-8 tab titles,
-address-bar synchronisation on navigate/redirect, and per-site tab titles.
-Full suite: 21 tests in ~2.4 s (down from ~174 s before navigation became
-asynchronous).
+address-bar synchronisation on navigate/redirect, per-site tab titles, and
+the keyboard-shortcut suite. Full suite: 22 tests in ~2.5 s (down from ~174 s
+before navigation became asynchronous).
 
 ## Build & run
 

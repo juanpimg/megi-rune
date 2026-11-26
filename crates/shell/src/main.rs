@@ -27,6 +27,7 @@ fn main() {
     rune::run(AppSpec::<State> {
         scenes: &[("no-sidebar", hide_sidebar), ("inline-page", inline_page)],
         poll: Some(state::poll),
+        on_key: Some(state::on_key),
         ..AppSpec::new(
             "Megi — Rune Shell",
             (1280.0, 800.0),
