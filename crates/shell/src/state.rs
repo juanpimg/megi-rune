@@ -128,16 +128,22 @@ pub fn resolve_href(base: &str, href: &str) -> String {
     };
     let scheme = &base[..scheme_end];
     let after = &base[scheme_end + 3..];
-    let host_end = after.find('/').unwrap_or(after.len());
-    let host = &after[..host_end];
+    // Query and fragment are not part of the directory path; strip them before
+    // splitting into segments (otherwise `?x=1` leaks into a resolved link).
+    let path_part = after
+        .split_once('?')
+        .or_else(|| after.split_once('#'))
+        .map_or(after, |(head, _)| head);
+    let host_end = path_part.find('/').unwrap_or(path_part.len());
+    let host = &path_part[..host_end];
     if let Some(rest) = href.strip_prefix("//") {
         return format!("{scheme}://{rest}");
     }
     if href.starts_with('/') {
         return format!("{scheme}://{host}{href}");
     }
-    let mut segments: Vec<&str> = if host_end < after.len() {
-        after[host_end + 1..].split('/').collect()
+    let mut segments: Vec<&str> = if host_end < path_part.len() {
+        path_part[host_end + 1..].split('/').collect()
     } else {
         Vec::new()
     };

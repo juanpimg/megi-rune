@@ -579,6 +579,14 @@ fn relative_links_resolve_against_base() {
         crate::state::resolve_href(base, "https://absolute.test/z"),
         "https://absolute.test/z"
     );
+    // Query/fragment on the base must not leak into a relative resolution.
+    assert_eq!(
+        crate::state::resolve_href(
+            "https://es.wikipedia.org/wiki/Historia?oldid=1#Intro",
+            "Fenicia"
+        ),
+        "https://es.wikipedia.org/wiki/Fenicia"
+    );
 }
 
 #[test]
